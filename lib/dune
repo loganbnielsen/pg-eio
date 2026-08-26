@@ -4,6 +4,7 @@
  (wrapped false)
  (modules Storage_error Db Migration Table)
  (libraries
+   eio
    uri
    caqti
    caqti-eio

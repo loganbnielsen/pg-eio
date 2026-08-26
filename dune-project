@@ -21,6 +21,7 @@ supported backend by design.")
  (source (github loganbnielsen/pg-eio))
  (depends
   (ocaml (>= 5.4.0))
+  (eio (>= 1.3))
   (uri (>= 4.4.0))
   (caqti (>= 2.3.0))
   (caqti-eio (>= 2.2.0))

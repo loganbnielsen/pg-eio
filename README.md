@@ -1,6 +1,6 @@
 # pg-eio
 
-A thin, opinionated PostgreSQL layer for Eio 5, built directly on
+A thin, opinionated PostgreSQL layer for OCaml 5 / Eio, built directly on
 [`caqti`](https://github.com/paurkedal/ocaml-caqti) /
 [`caqti-eio`](https://github.com/paurkedal/ocaml-caqti) /
 `caqti-driver-postgresql`: a connection pool, typed `exec`/`find`/`collect`/
@@ -21,8 +21,10 @@ dune build
 ## Test
 
 ```bash
-bash platform/local/scripts/ensure-postgres.sh   # or any local Postgres
-POSTGRES_URL=postgresql://postgres:dev@localhost:5432/pg_eio_test dune runtest
+# any local Postgres instance works, e.g.:
+docker run -d --rm -e POSTGRES_PASSWORD=dev -p 5432:5432 postgres:16-alpine
+
+POSTGRES_URL=postgresql://postgres:dev@localhost:5432/postgres dune runtest
 ```
 
 Unit tests that don't need a database (identifier/limit/offset validation, migration
