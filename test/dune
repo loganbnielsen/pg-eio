@@ -1,0 +1,9 @@
+(test
+ (name test_pg_eio)
+ (modules test_pg_eio)
+ (libraries
+   alcotest
+   eio_main
+   eio.unix
+   pg_eio
+   caqti))

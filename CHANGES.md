@@ -1,0 +1,12 @@
+# Changes
+
+## 0.1.0
+
+- Initial standalone OPAM package: `Db` connection pool (`exec`/`find`/`collect`/
+  `transaction`), `Migration` SQL migration runner (`apply`/`status`/`rollback`,
+  PostgreSQL-aware statement splitting), and `Table.Make(SCHEMA)` CRUD functor.
+- `Migration`'s `?table` parameter is now validated as an unquoted SQL identifier
+  (reusing `Table`'s existing validator) before use, closing an injection surface
+  that existed while this code lived in-tree.
+- `Db.transaction` no longer silently discards a rollback failure; if rollback
+  itself fails after the original error, both are reported together.

@@ -1,0 +1,11 @@
+(library
+ (name pg_eio)
+ (public_name pg-eio)
+ (wrapped false)
+ (modules Storage_error Db Migration Table)
+ (libraries
+   uri
+   caqti
+   caqti-eio
+   caqti-eio.unix
+   caqti-driver-postgresql))
