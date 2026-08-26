@@ -18,21 +18,21 @@ val create_pool
 (** Execute a statement that returns no rows. *)
 val exec
   :  pool
-  -> ('p, unit, [< `Zero]) Caqti_request.t
+  -> ('p, unit, [< `Zero]) Request.t
   -> 'p
   -> (unit, Storage_error.t) result
 
 (** Return zero or one row. *)
 val find
   :  pool
-  -> ('p, 'r, [< `Zero | `One]) Caqti_request.t
+  -> ('p, 'r, [< `Zero | `One]) Request.t
   -> 'p
   -> ('r option, Storage_error.t) result
 
 (** Return all matching rows as a list. *)
 val collect
   :  pool
-  -> ('p, 'r, [< `Zero | `One | `Many]) Caqti_request.t
+  -> ('p, 'r, [< `Zero | `One | `Many]) Request.t
   -> 'p
   -> ('r list, Storage_error.t) result
 
