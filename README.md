@@ -21,10 +21,7 @@ dune build
 ## Test
 
 ```bash
-# any local Postgres instance works, e.g.:
-docker run -d --rm -e POSTGRES_PASSWORD=dev -p 5432:5432 postgres:16-alpine
-
-POSTGRES_URL=postgresql://postgres:dev@localhost:5432/postgres dune runtest
+./scripts/test-e2e.sh
 ```
 
 Unit tests that don't need a database (identifier/limit/offset validation, migration
