@@ -48,13 +48,11 @@ let split_sql_statements sql =
     let c = sql.[!i] in
     (match c with
     | '-' when !i + 1 < n && sql.[!i + 1] = '-' ->
-      (* line comment: consume to end of line *)
       Buffer.add_char buf '-'; Buffer.add_char buf '-'; i := !i + 2;
       while !i < n && sql.[!i] <> '\n' do
         Buffer.add_char buf sql.[!i]; incr i
       done
     | '/' when !i + 1 < n && sql.[!i + 1] = '*' ->
-      (* block comment: consume until closing *\/ *)
       Buffer.add_char buf '/'; Buffer.add_char buf '*'; i := !i + 2;
       let closed = ref false in
       while !i < n && not !closed do
