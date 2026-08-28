@@ -27,8 +27,8 @@ let read_migrations dir =
   | files ->
     let parsed = Array.to_list files |> List.filter_map (fun f ->
       match parse_filename f with
-      | None         -> None
-      | Some (v, nm) -> Some (v, nm, Filename.concat dir f))
+      | None           -> None
+      | Some (v, name) -> Some (v, name, Filename.concat dir f))
     in
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare a b) parsed in
     Ok sorted
@@ -135,40 +135,40 @@ let exec_statements pool stmts =
 
 (* ── Per-table helpers (table name injected at call time) ───────────────── *)
 
-let ensure_table tbl pool =
+let ensure_table table pool =
   let q = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
     (Printf.sprintf
        {|CREATE TABLE IF NOT EXISTS %s (
            version    INTEGER PRIMARY KEY,
            name       TEXT    NOT NULL,
            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-         )|} tbl)
+         )|} table)
   in
   Db.exec pool q ()
 
-let applied_versions tbl pool =
+let applied_versions table pool =
   let q = Caqti_request.Infix.(Caqti_type.unit ->* Caqti_type.int) ~oneshot:true
-    (Printf.sprintf "SELECT version FROM %s ORDER BY version" tbl)
+    (Printf.sprintf "SELECT version FROM %s ORDER BY version" table)
   in
   Db.collect pool q ()
 
-let record_migration tbl pool version name =
+let record_migration table pool version name =
   let q = Caqti_request.Infix.(Caqti_type.(t2 int string) ->. Caqti_type.unit) ~oneshot:true
-    (Printf.sprintf "INSERT INTO %s (version, name) VALUES (?, ?)" tbl)
+    (Printf.sprintf "INSERT INTO %s (version, name) VALUES (?, ?)" table)
   in
   Db.exec pool q (version, name)
 
-let applied_at_q tbl =
+let applied_at_q table =
   Caqti_request.Infix.(Caqti_type.int ->? Caqti_type.string) ~oneshot:true
-    (Printf.sprintf "SELECT applied_at::text FROM %s WHERE version = ?" tbl)
+    (Printf.sprintf "SELECT applied_at::text FROM %s WHERE version = ?" table)
 
-let last_applied_q tbl =
+let last_applied_q table =
   Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.(t2 int string)) ~oneshot:true
-    (Printf.sprintf "SELECT version, name FROM %s ORDER BY version DESC LIMIT 1" tbl)
+    (Printf.sprintf "SELECT version, name FROM %s ORDER BY version DESC LIMIT 1" table)
 
-let delete_version_q tbl =
+let delete_version_q table =
   Caqti_request.Infix.(Caqti_type.int ->. Caqti_type.unit) ~oneshot:true
-    (Printf.sprintf "DELETE FROM %s WHERE version = ?" tbl)
+    (Printf.sprintf "DELETE FROM %s WHERE version = ?" table)
 
 (* ── Public API ──────────────────────────────────────────────────────────── *)
 
