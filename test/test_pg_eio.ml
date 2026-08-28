@@ -296,7 +296,6 @@ let test_migration_apply () =
       Alcotest.(check bool) (Printf.sprintf "v%d applied" ms.Migration.version)
         true (ms.Migration.applied_at <> None)
     ) s;
-    (* Cleanup *)
     let drop_q =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         (Printf.sprintf "DROP TABLE IF EXISTS sun_mig_items, %s" mtable)

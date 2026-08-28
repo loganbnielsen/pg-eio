@@ -33,9 +33,7 @@ let read_migrations dir =
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare a b) parsed in
     Ok sorted
 
-(* PostgreSQL-aware SQL splitter.  Correctly handles semicolons that appear
-   inside single-quoted strings, line comments, block comments, and
-   dollar-quoted bodies (PL/pgSQL functions, triggers, etc.). *)
+(* PostgreSQL-aware: semicolons inside strings, comments, and dollar-quoted bodies don't split. *)
 let split_sql_statements sql =
   let n   = String.length sql in
   let buf = Buffer.create 256 in
@@ -108,8 +106,7 @@ let split_sql_statements sql =
   flush ();
   List.rev !acc
 
-(* SELECT/WITH/TABLE/VALUES statements return Tuples_ok; DDL returns Command_ok.
-   Caqti requires the multiplicity to match, so we route accordingly. *)
+(* Caqti requires multiplicity to match: SELECT/WITH/TABLE/VALUES return Tuples_ok, DDL returns Command_ok. *)
 let returns_rows stmt =
   let s = String.trim stmt in
   let n = String.length s in
@@ -174,9 +171,7 @@ let delete_version_q tbl =
 
 let default_table = "sun_schema_migrations"
 
-(* Migration's ~table takes the same shape as Table.Make's table/column names
-   (interpolated unquoted into generated SQL) but had no validation of its own —
-   reuse Table's validator instead of duplicating it. *)
+(* ~table is interpolated unquoted into SQL; reuse Table's identifier validator to prevent injection. *)
 let validate_table table =
   match Table.Identifier.of_string ~kind:"migrations table" table with
   | Ok id   -> Ok (Table.Identifier.to_string id)
