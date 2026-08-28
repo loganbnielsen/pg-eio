@@ -25,7 +25,7 @@ let create_pool ~url ?pool_size ~sw ~stdenv () =
     | Some n -> Caqti_pool_config.create ~max_size:n ()
   in
   let* p = Caqti_eio_unix.connect_pool ~sw ~stdenv ~pool_config uri
-    |> Result.map_error (fun e -> Storage_error.Connection_failed (Caqti_error.show e)) in
+    |> Result.map_error (fun e -> Storage_error.Connection_error (Caqti_error.show e)) in
   let use_conn (type b)
       (f : Caqti_eio.connection -> (b, Storage_error.t) result)
       : (b, Storage_error.t) result =
@@ -36,7 +36,7 @@ let create_pool ~url ?pool_size ~sw ~stdenv () =
         | Error e -> raise (App_error e)
       ) p with
       | Ok v    -> Ok v
-      | Error e -> Error (Storage_error.Connection_failed (Caqti_error.show e))
+      | Error e -> Error (Storage_error.Connection_error (Caqti_error.show e))
     with App_error e -> Error e
   in
   Ok { use_conn }

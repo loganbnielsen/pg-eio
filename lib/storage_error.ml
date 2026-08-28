@@ -1,13 +1,13 @@
 type t =
-  | Connection_failed of string
+  | Connection_error of string
   | Query_error       of string
   | Not_found
-  | Constraint_violation of string
+  | Constraint_error of string
   | Migration_error   of string
 
 let to_string = function
-  | Connection_failed msg    -> "connection failed: " ^ msg
+  | Connection_error msg    -> "connection failed: " ^ msg
   | Query_error msg          -> "query error: " ^ msg
   | Not_found                -> "not found"
-  | Constraint_violation msg -> "constraint violation: " ^ msg
+  | Constraint_error msg -> "constraint violation: " ^ msg
   | Migration_error msg      -> "migration error: " ^ msg
