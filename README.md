@@ -35,10 +35,10 @@ cleanly (`[skip] POSTGRES_URL not set`) when it isn't set.
 
 ```ocaml
 type t =
-  | Connection_failed of string
+  | Connection_error  of string
   | Query_error       of string
   | Not_found
-  | Constraint_violation of string
+  | Constraint_error  of string
   | Migration_error   of string
 
 val to_string : t -> string
