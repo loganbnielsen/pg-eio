@@ -126,16 +126,16 @@ module Make (S : SCHEMA) = struct
       |> Identifier.of_string_exn ~kind:"column"
       |> Identifier.to_string)
 
-  let col_list = String.concat ", " columns
+  let column_list = String.concat ", " columns
 
   let find_q =
     Caqti_request.Infix.(S.id_type ->? S.row_type)
-      (Printf.sprintf "SELECT %s FROM %s WHERE %s = ?" col_list table id_column)
+      (Printf.sprintf "SELECT %s FROM %s WHERE %s = ?" column_list table id_column)
 
   let insert_q =
     Caqti_request.Infix.(S.row_type ->. Caqti_type.unit)
       (Printf.sprintf "INSERT INTO %s (%s) VALUES (%s)"
-         table col_list (placeholders (List.length columns)))
+         table column_list (placeholders (List.length columns)))
 
   let delete_q =
     Caqti_request.Infix.(S.id_type ->. Caqti_type.unit)
@@ -143,7 +143,7 @@ module Make (S : SCHEMA) = struct
 
   let list_q =
     Caqti_request.Infix.(Caqti_type.(t2 int int) ->* S.row_type)
-      (Printf.sprintf "SELECT %s FROM %s LIMIT ? OFFSET ?" col_list table)
+      (Printf.sprintf "SELECT %s FROM %s LIMIT ? OFFSET ?" column_list table)
 
   let find   pool id  = Db.find    pool find_q   id
   let insert pool row = Db.exec    pool insert_q  row
