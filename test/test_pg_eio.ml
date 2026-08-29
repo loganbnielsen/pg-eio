@@ -22,6 +22,21 @@ let test_error_to_string () =
     Alcotest.(check string) "to_string" expected (Storage_error.to_string err)
   ) cases
 
+let test_create_pool_rejects_invalid_pool_size () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  List.iter
+    (fun pool_size ->
+      match
+        Db.create_pool ~url:"postgresql://localhost/not-used" ~pool_size ~sw
+          ~stdenv:(env :> Caqti_eio.stdenv) ()
+      with
+      | Error (Storage_error.Connection_error msg) ->
+        Alcotest.(check string) "pool_size error" "pool_size must be positive" msg
+      | Error err -> Alcotest.failf "unexpected error: %s" (Storage_error.to_string err)
+      | Ok _ -> Alcotest.failf "expected invalid pool_size: %d" pool_size)
+    [ 0; -1 ]
+
 let test_migration_parse_filename () =
   let cases = [
     "0001_init.sql",               Some (1, "init");
@@ -526,6 +541,7 @@ let () =
   run "pg_eio" [
     "errors", [
       test_case "to_string"      `Quick test_error_to_string;
+      test_case "invalid_pool_size" `Quick test_create_pool_rejects_invalid_pool_size;
     ];
     "migration_parse", [
       test_case "parse_filename" `Quick test_migration_parse_filename;
