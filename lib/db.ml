@@ -19,6 +19,11 @@ let translate_error e =
 let map_err r = Result.map_error translate_error r
 
 let create_pool ~url ?pool_size ~sw ~stdenv () =
+  let* () =
+    match pool_size with
+    | Some n when n <= 0 -> Error (Storage_error.Connection_error "pool_size must be positive")
+    | _ -> Ok ()
+  in
   let uri = Uri.of_string url in
   let pool_config = match pool_size with
     | None   -> Caqti_pool_config.create ()

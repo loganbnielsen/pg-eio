@@ -1,5 +1,10 @@
 # Changes
 
+## Unreleased
+
+- `Db.create_pool` now rejects non-positive `pool_size` values with
+  `Connection_error` before constructing the Caqti pool.
+
 ## 0.1.0
 
 - Initial standalone OPAM package: `Db` connection pool (`exec`/`find`/`collect`/

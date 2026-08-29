@@ -6,7 +6,8 @@ type pool
 
 (** [create_pool ~url ~sw ~stdenv ()] opens a connection pool to the Postgres
     instance at [url] (e.g. ["postgresql://user:pass@localhost/mydb"]).
-    The pool lives for the lifetime of [sw]. *)
+    The pool lives for the lifetime of [sw]. [?pool_size], when supplied,
+    must be positive. *)
 val create_pool
   :  url:string
   -> ?pool_size:int
