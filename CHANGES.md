@@ -10,3 +10,7 @@
   that existed while this code lived in-tree.
 - `Db.transaction` no longer silently discards a rollback failure; if rollback
   itself fails after the original error, both are reported together.
+- `Db.transaction` now rolls back when the callback raises, so the pooled
+  connection is not returned with an open transaction.
+- Public-API cleanup: `Migration.split_sql_statements` is private to the
+  migration runner instead of an installed helper.
