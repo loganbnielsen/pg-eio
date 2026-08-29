@@ -56,10 +56,16 @@ let collect pool req params =
 let transaction pool f =
   pool.use_conn (fun conn ->
     let module C = (val conn : Caqti_eio.CONNECTION) in
-    let* () = map_err (C.start ()) in
-    let tx_pool = { use_conn = fun g -> g conn } in
-    let result = f tx_pool in
-    match result with
+	    let* () = map_err (C.start ()) in
+	    let tx_pool = { use_conn = fun g -> g conn } in
+	    let result =
+	      try f tx_pool with
+	      | exn ->
+	        let bt = Printexc.get_raw_backtrace () in
+	        ignore (C.rollback ());
+	        Printexc.raise_with_backtrace exn bt
+	    in
+	    match result with
     | Ok _ ->
       let* () = map_err (C.commit ()) in
       result
