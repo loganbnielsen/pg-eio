@@ -37,7 +37,11 @@ val collect
   -> 'p
   -> ('r list, Storage_error.t) result
 
-(** Run [f] inside a database transaction. Commits on [Ok], rolls back on [Error]. *)
+(** Run [f] inside a database transaction.
+
+    Commits on [Ok], rolls back on [Error]. Non-fatal exceptions raised by [f]
+    are converted to [Error] after rollback; cancellation and runtime-fatal
+    exceptions still propagate. *)
 val transaction
   :  pool
   -> (pool -> ('a, Storage_error.t) result)

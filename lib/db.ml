@@ -61,23 +61,27 @@ let collect pool req params =
 let transaction pool f =
   pool.use_conn (fun conn ->
     let module C = (val conn : Caqti_eio.CONNECTION) in
-	    let* () = map_err (C.start ()) in
-	    let tx_pool = { use_conn = fun g -> g conn } in
-	    let result =
-	      try f tx_pool with
-	      | exn ->
-	        let bt = Printexc.get_raw_backtrace () in
-	        ignore (C.rollback ());
-	        Printexc.raise_with_backtrace exn bt
-	    in
-	    match result with
+    let rollback_error orig_err =
+      match C.rollback () with
+      | Ok () -> Error orig_err
+      | Error rb ->
+        Error (Storage_error.Query_error
+          (Printf.sprintf "%s (rollback also failed: %s)"
+             (Storage_error.to_string orig_err) (Caqti_error.show rb)))
+    in
+    let* () = map_err (C.start ()) in
+    let tx_pool = { use_conn = fun g -> g conn } in
+    let result =
+      try f tx_pool with
+      | (Out_of_memory | Stack_overflow | Sys.Break | Eio.Cancel.Cancelled _) as exn ->
+        raise exn
+      | exn ->
+        Error (Storage_error.Query_error
+          (Printf.sprintf "transaction callback raised: %s" (Printexc.to_string exn)))
+    in
+    match result with
     | Ok _ ->
       let* () = map_err (C.commit ()) in
       result
-    | Error orig_err ->
-      (match C.rollback () with
-       | Ok ()    -> Error orig_err
-       | Error rb -> Error (Storage_error.Query_error
-           (Printf.sprintf "%s (rollback also failed: %s)"
-              (Storage_error.to_string orig_err) (Caqti_error.show rb))))
+    | Error orig_err -> rollback_error orig_err
     )
