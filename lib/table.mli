@@ -33,7 +33,6 @@ module Identifier : sig
   type t = private string
 
   val of_string : ?kind:string -> string -> (t, Storage_error.t) result
-  val of_string_exn : ?kind:string -> string -> t
   val to_string : t -> string
 end
 

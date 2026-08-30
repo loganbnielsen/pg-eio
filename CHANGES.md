@@ -6,6 +6,8 @@
   `Connection_error` before constructing the Caqti pool.
 - `Db.transaction` now converts non-fatal callback exceptions into returned
   `Query_error`s after rollback instead of leaking an exception path.
+- `Table.Identifier.of_string_exn` is no longer part of the installed
+  interface; callers should use the `result`-returning `of_string`.
 
 ## 0.1.0
 
