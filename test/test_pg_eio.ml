@@ -319,6 +319,35 @@ let test_transaction_rollback_on_exception () =
     Alcotest.(check (option int)) "raised transaction rolled back" (Some 0) n;
     or_fail (Db.exec pool drop_q ())
 
+let test_transaction_unique_violation_maps_to_constraint_error () =
+  match postgres_url () with
+  | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
+  | Some url ->
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let pool = Db.create_pool ~url ~sw
+                 ~stdenv:(env :> Caqti_eio.stdenv) ()
+               |> or_fail in
+    let create_q =
+      Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+        "CREATE TEMP TABLE sun_test_uniq (id INT PRIMARY KEY)"
+    in
+    let insert_q =
+      Caqti_request.Infix.(Caqti_type.int ->. Caqti_type.unit)
+        "INSERT INTO sun_test_uniq (id) VALUES (?)"
+    in
+    let drop_q =
+      Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+        "DROP TABLE IF EXISTS sun_test_uniq"
+    in
+    or_fail (Db.exec pool create_q ());
+    or_fail (Db.exec pool insert_q 1);
+    (match Db.exec pool insert_q 1 with
+     | Error (Storage_error.Constraint_error _) -> ()
+     | Error e -> Alcotest.failf "expected Constraint_error, got: %s" (Storage_error.to_string e)
+     | Ok () -> Alcotest.fail "expected duplicate key to be rejected");
+    or_fail (Db.exec pool drop_q ())
+
 let test_migration_apply () =
   match postgres_url () with
   | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
@@ -441,6 +470,35 @@ SELECT %s();|} tbl fn_name tbl fn_name);
     in
     or_fail (Db.exec pool drop_fn_q ());
     or_fail (Db.exec pool drop_tbl_q ())
+
+let test_migration_insert_returning () =
+  match postgres_url () with
+  | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
+  | Some url ->
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let pool = Db.create_pool ~url ~sw
+                 ~stdenv:(env :> Caqti_eio.stdenv) ()
+               |> or_fail in
+    with_migration_dir @@ fun dir write ->
+    let tbl = Printf.sprintf "sun_mig_ret_%d" (Random.int 1000000) in
+    let mtable = Printf.sprintf "sun_test_mig_ret_%d" (Random.int 1000000) in
+    write (Printf.sprintf "0001_create_%s.sql" tbl)
+      (Printf.sprintf
+        {|CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, note TEXT);
+INSERT INTO %s (note) VALUES ('hello') RETURNING id;|} tbl tbl);
+    or_fail (Migration.apply pool ~dir ~table:mtable);
+    let count_q =
+      Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true
+        (Printf.sprintf "SELECT count(*)::int FROM %s" tbl)
+    in
+    let n = or_fail (Db.find pool count_q ()) in
+    Alcotest.(check (option int)) "row inserted via a RETURNING statement" (Some 1) n;
+    let cleanup_q =
+      Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+        (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
+    in
+    or_fail (Db.exec pool cleanup_q ())
 
 let test_migration_rollback_down_sql () =
   match postgres_url () with
@@ -571,12 +629,15 @@ let () =
       test_case "transaction_commit"  `Quick test_transaction_commit;
       test_case "transaction_rollback"`Quick test_transaction_rollback;
       test_case "transaction_rollback_on_exception" `Quick test_transaction_rollback_on_exception;
+      test_case "transaction_unique_violation_maps_to_constraint_error" `Quick
+        test_transaction_unique_violation_maps_to_constraint_error;
       test_case "migration_apply"     `Quick test_migration_apply;
       test_case "table_make"          `Quick test_table_make;
     ];
     "migration_pg", [
       test_case "semicolon_in_string"     `Quick test_migration_semicolon_in_string;
       test_case "dollar_quoted"           `Quick test_migration_dollar_quoted;
+      test_case "insert_returning"        `Quick test_migration_insert_returning;
       test_case "rollback_down_sql"       `Quick test_migration_rollback_down_sql;
       test_case "rejects_unsafe_table_name" `Quick test_migration_rejects_unsafe_table_name;
     ];
