@@ -104,7 +104,14 @@ let split_sql_statements sql =
   flush ();
   List.rev !acc
 
-(* Caqti requires multiplicity to match: SELECT/WITH/TABLE/VALUES return Tuples_ok, DDL returns Command_ok. *)
+let contains_substring ~needle haystack =
+  let hn = String.length needle and hs = String.length haystack in
+  let rec go i = i <= hs - hn && (String.sub haystack i hn = needle || go (i + 1)) in
+  hn = 0 || go 0
+
+(* Caqti requires multiplicity to match: SELECT/WITH/TABLE/VALUES return
+   Tuples_ok, DDL returns Command_ok — as does INSERT/UPDATE/DELETE unless it
+   carries a RETURNING clause, which also produces rows. *)
 let returns_rows stmt =
   let s = String.trim stmt in
   let n = String.length s in
@@ -112,6 +119,7 @@ let returns_rows stmt =
   while !i < n && Char.code s.[!i] > 32 && s.[!i] <> '(' do incr i done;
   let kw = String.uppercase_ascii (String.sub s 0 !i) in
   kw = "SELECT" || kw = "WITH" || kw = "TABLE" || kw = "VALUES"
+  || contains_substring ~needle:"RETURNING" (String.uppercase_ascii s)
 
 let exec_statements pool stmts =
   List.fold_left (fun acc stmt ->

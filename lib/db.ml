@@ -14,7 +14,13 @@ exception App_error of Storage_error.t
 let ( let* ) = Result.bind
 
 let translate_error e =
-  Storage_error.Query_error (Caqti_error.show e)
+  match e with
+  | (`Request_failed _ | `Response_failed _) as e ->
+    (match Caqti_error.cause e with
+     | #Caqti_error.integrity_constraint_violation ->
+       Storage_error.Constraint_error (Caqti_error.show e)
+     | _ -> Storage_error.Query_error (Caqti_error.show e))
+  | e -> Storage_error.Query_error (Caqti_error.show e)
 
 let map_err r = Result.map_error translate_error r
 
