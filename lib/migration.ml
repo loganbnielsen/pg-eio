@@ -33,6 +33,55 @@ let read_migrations dir =
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare a b) parsed in
     Ok sorted
 
+(* If sql.[i] begins a "--" comment, "/* */" comment, single-quoted string
+   ('' is an escaped quote), or a $tag$...$tag$ dollar-quoted block, returns
+   the index just past it — none of that span is real SQL syntax, so
+   neither statement-splitting (on ';') nor keyword search (for RETURNING,
+   below) should look inside it. Returns None when sql.[i] is ordinary SQL
+   code (including a lone '$' that isn't part of a real dollar-quote tag).
+   Shared by split_sql_statements and returns_rows so both agree on what
+   counts as "not really SQL text." *)
+let skip_span sql i =
+  let n = String.length sql in
+  match sql.[i] with
+  | '-' when i + 1 < n && sql.[i + 1] = '-' ->
+    let j = ref (i + 2) in
+    while !j < n && sql.[!j] <> '\n' do incr j done;
+    Some !j
+  | '/' when i + 1 < n && sql.[i + 1] = '*' ->
+    let j = ref (i + 2) in
+    let closed = ref false in
+    while !j < n && not !closed do
+      if sql.[!j] = '*' && !j + 1 < n && sql.[!j + 1] = '/' then (j := !j + 2; closed := true)
+      else incr j
+    done;
+    Some !j
+  | '\'' ->
+    let j = ref (i + 1) in
+    let closed = ref false in
+    while !j < n && not !closed do
+      if sql.[!j] = '\'' then begin
+        if !j + 1 < n && sql.[!j + 1] = '\'' then j := !j + 2  (* escaped quote — stay in string *)
+        else (incr j; closed := true)
+      end else incr j
+    done;
+    Some !j
+  | '$' ->
+    let j = ref (i + 1) in
+    while !j < n && sql.[!j] <> '$' && sql.[!j] <> '\n' && sql.[!j] <> ' ' do incr j done;
+    if !j < n && sql.[!j] = '$' then begin
+      let delim = String.sub sql i (!j - i + 1) in
+      let dlen  = String.length delim in
+      let k = ref (!j + 1) in
+      let closed = ref false in
+      while !k < n && not !closed do
+        if !k + dlen <= n && String.sub sql !k dlen = delim then (k := !k + dlen; closed := true)
+        else incr k
+      done;
+      Some !k
+    end else None
+  | _ -> None
+
 (* PostgreSQL-aware: semicolons inside strings, comments, and dollar-quoted bodies don't split. *)
 let split_sql_statements sql =
   let n   = String.length sql in
@@ -45,69 +94,40 @@ let split_sql_statements sql =
     Buffer.clear buf
   in
   while !i < n do
-    let c = sql.[!i] in
-    (match c with
-    | '-' when !i + 1 < n && sql.[!i + 1] = '-' ->
-      Buffer.add_char buf '-'; Buffer.add_char buf '-'; i := !i + 2;
-      while !i < n && sql.[!i] <> '\n' do
-        Buffer.add_char buf sql.[!i]; incr i
-      done
-    | '/' when !i + 1 < n && sql.[!i + 1] = '*' ->
-      Buffer.add_char buf '/'; Buffer.add_char buf '*'; i := !i + 2;
-      let closed = ref false in
-      while !i < n && not !closed do
-        let ch = sql.[!i] in
-        Buffer.add_char buf ch; incr i;
-        if ch = '*' && !i < n && sql.[!i] = '/' then begin
-          Buffer.add_char buf '/'; incr i; closed := true
-        end
-      done
-    | '\'' ->
-      (* single-quoted string; '' is an escaped quote *)
-      Buffer.add_char buf '\''; incr i;
-      let closed = ref false in
-      while !i < n && not !closed do
-        let ch = sql.[!i] in
-        Buffer.add_char buf ch; incr i;
-        if ch = '\'' then begin
-          if !i < n && sql.[!i] = '\'' then begin
-            Buffer.add_char buf '\''; incr i  (* escaped quote — stay in string *)
-          end else closed := true
-        end
-      done
-    | '$' ->
-      (* dollar-quoting: $tag$...$tag$ where tag may be empty *)
-      let j = ref (!i + 1) in
-      while !j < n && sql.[!j] <> '$' && sql.[!j] <> '\n' && sql.[!j] <> ' ' do
-        incr j
-      done;
-      if !j < n && sql.[!j] = '$' then begin
-        let delim = String.sub sql !i (!j - !i + 1) in
-        let dlen  = String.length delim in
-        Buffer.add_string buf delim; i := !j + 1;
-        let closed = ref false in
-        while !i < n && not !closed do
-          if !i + dlen <= n && String.sub sql !i dlen = delim then begin
-            Buffer.add_string buf delim; i := !i + dlen; closed := true
-          end else begin
-            Buffer.add_char buf sql.[!i]; incr i
-          end
-        done
-      end else begin
-        Buffer.add_char buf '$'; incr i
-      end
-    | ';' ->
-      flush (); incr i
-    | _ ->
-      Buffer.add_char buf c; incr i)
+    match skip_span sql !i with
+    | Some j -> Buffer.add_string buf (String.sub sql !i (j - !i)); i := j
+    | None ->
+      if sql.[!i] = ';' then (flush (); incr i)
+      else (Buffer.add_char buf sql.[!i]; incr i)
   done;
   flush ();
   List.rev !acc
 
-let contains_substring ~needle haystack =
-  let hn = String.length needle and hs = String.length haystack in
-  let rec go i = i <= hs - hn && (String.sub haystack i hn = needle || go (i + 1)) in
-  hn = 0 || go 0
+let is_word_char = function
+  | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' -> true
+  | _ -> false
+
+(* A case-insensitive, whole-word match for [keyword] in [stmt]'s real SQL
+   text — skipping string literals, comments, and dollar-quoted bodies (via
+   skip_span) so a string like 'now returning to base' or a comment
+   mentioning RETURNING doesn't count. *)
+let contains_bare_keyword stmt keyword =
+  let n = String.length stmt in
+  let kn = String.length keyword in
+  let rec scan i =
+    if i >= n then false
+    else
+      match skip_span stmt i with
+      | Some j -> scan j
+      | None ->
+        if i + kn <= n
+           && String.uppercase_ascii (String.sub stmt i kn) = keyword
+           && (i = 0 || not (is_word_char stmt.[i - 1]))
+           && (i + kn = n || not (is_word_char stmt.[i + kn]))
+        then true
+        else scan (i + 1)
+  in
+  scan 0
 
 (* Caqti requires multiplicity to match: SELECT/WITH/TABLE/VALUES return
    Tuples_ok, DDL returns Command_ok — as does INSERT/UPDATE/DELETE unless it
@@ -119,7 +139,7 @@ let returns_rows stmt =
   while !i < n && Char.code s.[!i] > 32 && s.[!i] <> '(' do incr i done;
   let kw = String.uppercase_ascii (String.sub s 0 !i) in
   kw = "SELECT" || kw = "WITH" || kw = "TABLE" || kw = "VALUES"
-  || contains_substring ~needle:"RETURNING" (String.uppercase_ascii s)
+  || contains_bare_keyword s "RETURNING"
 
 let exec_statements pool stmts =
   List.fold_left (fun acc stmt ->
