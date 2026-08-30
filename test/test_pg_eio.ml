@@ -500,6 +500,42 @@ INSERT INTO %s (note) VALUES ('hello') RETURNING id;|} tbl tbl);
     in
     or_fail (Db.exec pool cleanup_q ())
 
+(* Regression test: returns_rows used to substring-match "RETURNING"
+   anywhere in the raw statement text, including inside string literals —
+   so an ordinary INSERT with the word "returning" in a text value was
+   misclassified as row-returning and hit a real Caqti multiplicity
+   mismatch, the exact bug class the RETURNING fix was meant to eliminate. *)
+let test_migration_insert_with_returning_in_string_literal () =
+  match postgres_url () with
+  | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
+  | Some url ->
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let pool = Db.create_pool ~url ~sw
+                 ~stdenv:(env :> Caqti_eio.stdenv) ()
+               |> or_fail in
+    with_migration_dir @@ fun dir write ->
+    let tbl = Printf.sprintf "sun_mig_retlit_%d" (Random.int 1000000) in
+    let mtable = Printf.sprintf "sun_test_mig_retlit_%d" (Random.int 1000000) in
+    write (Printf.sprintf "0001_create_%s.sql" tbl)
+      (Printf.sprintf
+        {|CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, note TEXT);
+-- a comment mentioning returning should not count either
+INSERT INTO %s (note) VALUES ('now returning to base');|} tbl tbl);
+    or_fail (Migration.apply pool ~dir ~table:mtable);
+    let count_q =
+      Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true
+        (Printf.sprintf "SELECT count(*)::int FROM %s" tbl)
+    in
+    let n = or_fail (Db.find pool count_q ()) in
+    Alcotest.(check (option int))
+      "row inserted despite 'returning' appearing inside a string/comment" (Some 1) n;
+    let cleanup_q =
+      Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+        (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
+    in
+    or_fail (Db.exec pool cleanup_q ())
+
 let test_migration_rollback_down_sql () =
   match postgres_url () with
   | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
@@ -638,6 +674,8 @@ let () =
       test_case "semicolon_in_string"     `Quick test_migration_semicolon_in_string;
       test_case "dollar_quoted"           `Quick test_migration_dollar_quoted;
       test_case "insert_returning"        `Quick test_migration_insert_returning;
+      test_case "insert_with_returning_in_string_literal" `Quick
+        test_migration_insert_with_returning_in_string_literal;
       test_case "rollback_down_sql"       `Quick test_migration_rollback_down_sql;
       test_case "rejects_unsafe_table_name" `Quick test_migration_rejects_unsafe_table_name;
     ];
