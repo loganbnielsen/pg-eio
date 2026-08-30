@@ -305,11 +305,16 @@ let test_transaction_rollback_on_exception () =
         "DROP TABLE IF EXISTS sun_test_tx_exn"
     in
     or_fail (Db.exec pool create_q ());
-    (try
-       ignore (Db.transaction pool (fun p ->
-         or_fail (Db.exec p insert_q 1);
-         raise Exit))
-     with Exit -> ());
+    let result =
+      Db.transaction pool (fun p ->
+        or_fail (Db.exec p insert_q 1);
+        raise Exit)
+    in
+    Alcotest.(check bool) "callback exception is returned as Error" true
+      (match result with
+       | Error (Storage_error.Query_error msg) ->
+         String.starts_with ~prefix:"transaction callback raised:" msg
+       | _ -> false);
     let n = or_fail (Db.find pool count_q ()) in
     Alcotest.(check (option int)) "raised transaction rolled back" (Some 0) n;
     or_fail (Db.exec pool drop_q ())

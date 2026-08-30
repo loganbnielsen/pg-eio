@@ -4,6 +4,8 @@
 
 - `Db.create_pool` now rejects non-positive `pool_size` values with
   `Connection_error` before constructing the Caqti pool.
+- `Db.transaction` now converts non-fatal callback exceptions into returned
+  `Query_error`s after rollback instead of leaking an exception path.
 
 ## 0.1.0
 
