@@ -33,111 +33,139 @@ let read_migrations dir =
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare a b) parsed in
     Ok sorted
 
-(* If sql.[i] begins a "--" comment, "/* */" comment, single-quoted string
-   ('' is an escaped quote), or a $tag$...$tag$ dollar-quoted block, returns
-   the index just past it — none of that span is real SQL syntax, so
-   neither statement-splitting (on ';') nor keyword search (for RETURNING,
-   below) should look inside it. Returns None when sql.[i] is ordinary SQL
-   code (including a lone '$' that isn't part of a real dollar-quote tag).
-   Shared by split_sql_statements and returns_rows so both agree on what
-   counts as "not really SQL text." *)
-let skip_span sql i =
-  let n = String.length sql in
-  match sql.[i] with
-  | '-' when i + 1 < n && sql.[i + 1] = '-' ->
-    let j = ref (i + 2) in
-    while !j < n && sql.[!j] <> '\n' do incr j done;
-    Some !j
-  | '/' when i + 1 < n && sql.[i + 1] = '*' ->
-    let j = ref (i + 2) in
-    let closed = ref false in
-    while !j < n && not !closed do
-      if sql.[!j] = '*' && !j + 1 < n && sql.[!j + 1] = '/' then (j := !j + 2; closed := true)
-      else incr j
-    done;
-    Some !j
-  | '\'' ->
-    let j = ref (i + 1) in
-    let closed = ref false in
-    while !j < n && not !closed do
-      if sql.[!j] = '\'' then begin
-        if !j + 1 < n && sql.[!j + 1] = '\'' then j := !j + 2  (* escaped quote — stay in string *)
-        else (incr j; closed := true)
-      end else incr j
-    done;
-    Some !j
-  | '$' ->
-    let j = ref (i + 1) in
-    while !j < n && sql.[!j] <> '$' && sql.[!j] <> '\n' && sql.[!j] <> ' ' do incr j done;
-    if !j < n && sql.[!j] = '$' then begin
-      let delim = String.sub sql i (!j - i + 1) in
-      let dlen  = String.length delim in
-      let k = ref (!j + 1) in
-      let closed = ref false in
-      while !k < n && not !closed do
-        if !k + dlen <= n && String.sub sql !k dlen = delim then (k := !k + dlen; closed := true)
-        else incr k
-      done;
-      Some !k
-    end else None
-  | _ -> None
+(* A grammar, not an index-jumping scanner: a SQL file is a sequence of
+   tokens, each either one character of real code, a statement-separating
+   ';', or an entire "--"/"/* */" comment, '...'-quoted string (''
+   escapes), or $tag$...$tag$ dollar-quoted block (tag discovered at parse
+   time, so the closing delimiter isn't known until the opening one is
+   read) — none of the latter is real SQL syntax, so neither
+   statement-splitting nor keyword search (RETURNING, below) should look
+   inside it. Declaring what each of these IS, via Angstrom, replaces the
+   index-arithmetic that used to encode the same grammar as a hand-rolled
+   state machine (skip_span) — the same shape of bug (a keyword search
+   matching inside a string literal) that produced a real regression here
+   once already. *)
+module Token_grammar = struct
+  open Angstrom
+
+  type token =
+    | Code of char
+    | Skippable of string
+    | Semi
+
+  let line_comment = consumed (string "--" *> skip_while (fun c -> c <> '\n'))
+
+  let block_comment =
+    consumed (string "/*" *> (many_till any_char (string "*/") >>| ignore))
+
+  (* '' inside a string is an escaped quote, not the closing quote — must be
+     tried before the "is this the closing quote?" check, or the first '
+     of a '' pair would end the string one character early. *)
+  let string_literal =
+    consumed (char '\'' *> fix (fun rest ->
+      (string "''" *> rest)
+      <|> (char '\'' *> return ())
+      <|> (any_char *> rest)))
+
+  (* A tag run of 0+ chars that aren't '$'/'\n'/' ', then a closing '$' —
+     fails (backtracks) if no such '$' follows before one of those, so a
+     lone '$' that isn't a real dollar-quote open falls through to being
+     read as one ordinary code character instead. *)
+  let dollar_tag = consumed (char '$' *> skip_while (function '$' | '\n' | ' ' -> false | _ -> true) *> char '$')
+
+  let dollar_quoted =
+    consumed (dollar_tag >>= fun tag -> fix (fun rest -> (string tag *> return ()) <|> (any_char *> rest)))
+
+  let token =
+    choice
+      [ (line_comment >>| fun s -> Skippable s);
+        (block_comment >>| fun s -> Skippable s);
+        (string_literal >>| fun s -> Skippable s);
+        (dollar_quoted >>| fun s -> Skippable s);
+        (char ';' >>| fun _ -> Semi);
+        (any_char >>| fun c -> Code c);
+      ]
+
+  let tokens_of_string s =
+    match parse_string ~consume:Consume.All (many token) s with
+    | Ok tokens -> tokens
+    | Error msg ->
+      (* token's any_char case matches any remaining input unconditionally,
+         so `many token` cannot fail to consume the whole string — this is
+         unreachable, not a real error path. *)
+      failwith ("Migration.Token_grammar: unreachable parse failure: " ^ msg)
+end
+
+(* Splits a flat token stream into one token list per statement, dropping
+   the ';' separators themselves — pure list recursion, no index into the
+   original string. *)
+let group_by_semicolons tokens =
+  let rec go acc cur = function
+    | [] -> List.rev (if cur = [] then acc else List.rev cur :: acc)
+    | Token_grammar.Semi :: rest -> go (if cur = [] then acc else List.rev cur :: acc) [] rest
+    | tok :: rest -> go acc (tok :: cur) rest
+  in
+  go [] [] tokens
+
+let text_of_tokens tokens =
+  let buf = Buffer.create 256 in
+  List.iter (function
+    | Token_grammar.Code c -> Buffer.add_char buf c
+    | Token_grammar.Skippable s -> Buffer.add_string buf s
+    | Token_grammar.Semi -> Buffer.add_char buf ';')
+    tokens;
+  String.trim (Buffer.contents buf)
 
 (* PostgreSQL-aware: semicolons inside strings, comments, and dollar-quoted bodies don't split. *)
 let split_sql_statements sql =
-  let n   = String.length sql in
-  let buf = Buffer.create 256 in
-  let acc = ref [] in
-  let i   = ref 0 in
-  let flush () =
-    let s = String.trim (Buffer.contents buf) in
-    if String.length s > 0 then acc := s :: !acc;
-    Buffer.clear buf
-  in
-  while !i < n do
-    match skip_span sql !i with
-    | Some j -> Buffer.add_string buf (String.sub sql !i (j - !i)); i := j
-    | None ->
-      if sql.[!i] = ';' then (flush (); incr i)
-      else (Buffer.add_char buf sql.[!i]; incr i)
-  done;
-  flush ();
-  List.rev !acc
+  Token_grammar.tokens_of_string sql
+  |> group_by_semicolons
+  |> List.map text_of_tokens
+  |> List.filter (fun s -> String.length s > 0)
 
 let is_word_char = function
   | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' -> true
   | _ -> false
 
-(* A case-insensitive, whole-word match for [keyword] in [stmt]'s real SQL
-   text — skipping string literals, comments, and dollar-quoted bodies (via
-   skip_span) so a string like 'now returning to base' or a comment
-   mentioning RETURNING doesn't count. *)
-let contains_bare_keyword stmt keyword =
-  let n = String.length stmt in
-  let kn = String.length keyword in
+(* Every Skippable span becomes a single space — safe to search this view
+   with a plain substring scan for a keyword string literals/comments can
+   no longer hide inside, since any span that could contain "RETURNING" as
+   ordinary text is now exactly one space character. The single space also
+   still yields a correct word boundary either side of where the span was,
+   since every span this grammar recognizes opens on a non-word character
+   ('-', '/', '\'', '$'). *)
+let code_view_of_tokens tokens =
+  let buf = Buffer.create 256 in
+  List.iter (function
+    | Token_grammar.Code c -> Buffer.add_char buf c
+    | Token_grammar.Skippable _ -> Buffer.add_char buf ' '
+    | Token_grammar.Semi -> Buffer.add_char buf ';')
+    tokens;
+  Buffer.contents buf
+
+let contains_bare_keyword s keyword =
+  let s = String.uppercase_ascii s in
+  let n = String.length s and kn = String.length keyword in
   let rec scan i =
-    if i >= n then false
-    else
-      match skip_span stmt i with
-      | Some j -> scan j
-      | None ->
-        if i + kn <= n
-           && String.uppercase_ascii (String.sub stmt i kn) = keyword
-           && (i = 0 || not (is_word_char stmt.[i - 1]))
-           && (i + kn = n || not (is_word_char stmt.[i + kn]))
-        then true
-        else scan (i + 1)
+    i + kn <= n
+    && ((String.sub s i kn = keyword
+         && (i = 0 || not (is_word_char s.[i - 1]))
+         && (i + kn = n || not (is_word_char s.[i + kn])))
+        || scan (i + 1))
   in
-  scan 0
+  n >= kn && scan 0
+
+let leading_word s =
+  let n = String.length s in
+  let rec scan i = if i < n && Char.code s.[i] > 32 && s.[i] <> '(' then scan (i + 1) else i in
+  String.uppercase_ascii (String.sub s 0 (scan 0))
 
 (* Caqti requires multiplicity to match: SELECT/WITH/TABLE/VALUES return
    Tuples_ok, DDL returns Command_ok — as does INSERT/UPDATE/DELETE unless it
    carries a RETURNING clause, which also produces rows. *)
 let returns_rows stmt =
-  let s = String.trim stmt in
-  let n = String.length s in
-  let i = ref 0 in
-  while !i < n && Char.code s.[!i] > 32 && s.[!i] <> '(' do incr i done;
-  let kw = String.uppercase_ascii (String.sub s 0 !i) in
+  let s = String.trim (code_view_of_tokens (Token_grammar.tokens_of_string stmt)) in
+  let kw = leading_word s in
   kw = "SELECT" || kw = "WITH" || kw = "TABLE" || kw = "VALUES"
   || contains_bare_keyword s "RETURNING"
 

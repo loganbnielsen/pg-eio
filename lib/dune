@@ -6,6 +6,7 @@
  (libraries
    eio
    uri
+   angstrom
    caqti
    caqti-eio
    caqti-eio.unix
