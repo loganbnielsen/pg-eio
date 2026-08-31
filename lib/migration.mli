@@ -14,9 +14,9 @@ type status = {
 val apply
   :  ?table:string
   -> fs:_ Eio.Path.t
-  -> Db.pool
+  -> Pg_db.pool
   -> dir:string
-  -> (unit, Storage_error.t) result
+  -> (unit, Pg_error.t) result
 
 (** [status ~fs pool ~dir] returns one entry per migration file, showing whether
     each version has been applied and when. Pass [~table] to match the table
@@ -24,9 +24,9 @@ val apply
 val status
   :  ?table:string
   -> fs:_ Eio.Path.t
-  -> Db.pool
+  -> Pg_db.pool
   -> dir:string
-  -> (status list, Storage_error.t) result
+  -> (status list, Pg_error.t) result
 
 (** [rollback ~fs pool ~dir] rolls back the last applied migration by running the
     companion [NNNN_name.down.sql] file and removing the version record from the
@@ -36,6 +36,6 @@ val status
 val rollback
   :  ?table:string
   -> fs:_ Eio.Path.t
-  -> Db.pool
+  -> Pg_db.pool
   -> dir:string
-  -> (unit, Storage_error.t) result
+  -> (unit, Pg_error.t) result

@@ -4,7 +4,7 @@ A thin, opinionated PostgreSQL layer for OCaml 5 / Eio, built directly on
 [`caqti`](https://github.com/paurkedal/ocaml-caqti) /
 [`caqti-eio`](https://github.com/paurkedal/ocaml-caqti) /
 `caqti-driver-postgresql`: a connection pool, typed `exec`/`find`/`collect`/
-`transaction` helpers, a SQL migration runner, and a `Table.Make(SCHEMA)` functor for
+`transaction` helpers, a SQL migration runner, and a `Pg_table.Make(SCHEMA)` functor for
 basic CRUD on a single table. Not a query builder, not an ORM, not a multi-backend
 abstraction — PostgreSQL is the only supported backend, by design.
 
@@ -31,7 +31,7 @@ cleanly (`[skip] POSTGRES_URL not set`) when it isn't set.
 
 ## Public API
 
-### `Storage_error`
+### `Pg_error`
 
 ```ocaml
 type t =
@@ -43,7 +43,7 @@ type t =
 val to_string : t -> string
 ```
 
-### `Db`
+### `Pg_db`
 
 ```ocaml
 module Type    = Caqti_type
@@ -57,12 +57,12 @@ val create_pool
   -> sw:Eio.Switch.t
   -> stdenv:Caqti_eio.stdenv
   -> unit
-  -> (pool, Storage_error.t) result
+  -> (pool, Pg_error.t) result
 
-val exec        : pool -> ('p, unit, [< `Zero]) Caqti_request.t -> 'p -> (unit, Storage_error.t) result
-val find        : pool -> ('p, 'r, [< `Zero | `One]) Caqti_request.t -> 'p -> ('r option, Storage_error.t) result
-val collect     : pool -> ('p, 'r, [< `Zero | `One | `Many]) Caqti_request.t -> 'p -> ('r list, Storage_error.t) result
-val transaction : pool -> (pool -> ('a, Storage_error.t) result) -> ('a, Storage_error.t) result
+val exec        : pool -> ('p, unit, [< `Zero]) Caqti_request.t -> 'p -> (unit, Pg_error.t) result
+val find        : pool -> ('p, 'r, [< `Zero | `One]) Caqti_request.t -> 'p -> ('r option, Pg_error.t) result
+val collect     : pool -> ('p, 'r, [< `Zero | `One | `Many]) Caqti_request.t -> 'p -> ('r list, Pg_error.t) result
+val transaction : pool -> (pool -> ('a, Pg_error.t) result) -> ('a, Pg_error.t) result
 ```
 
 `caqti` uses `?` placeholders in SQL strings; the PostgreSQL driver translates them to
@@ -80,11 +80,11 @@ let find_q =
 let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let pool = Db.create_pool ~url:"postgresql://..." ~sw
+  let pool = Pg_db.create_pool ~url:"postgresql://..." ~sw
                ~stdenv:(env :> Caqti_eio.stdenv) ()
              |> Result.get_ok in
-  let _ = Db.exec pool insert_q (1, "Alice") in
-  let name = Db.find pool find_q 1 in
+  let _ = Pg_db.exec pool insert_q (1, "Alice") in
+  let name = Pg_db.find pool find_q 1 in
   ignore name
 ```
 
@@ -103,21 +103,21 @@ type status = {
 
 val apply
   :  ?table:string
-  -> Db.pool
+  -> Pg_db.pool
   -> dir:string
-  -> (unit, Storage_error.t) result
+  -> (unit, Pg_error.t) result
 
 val status
   :  ?table:string
-  -> Db.pool
+  -> Pg_db.pool
   -> dir:string
-  -> (status list, Storage_error.t) result
+  -> (status list, Pg_error.t) result
 
 val rollback
   :  ?table:string
-  -> Db.pool
+  -> Pg_db.pool
   -> dir:string
-  -> (unit, Storage_error.t) result
+  -> (unit, Pg_error.t) result
 ```
 
 Migration files follow the naming convention `NNNN_description.sql` (e.g.
@@ -133,7 +133,7 @@ statements is PostgreSQL-aware: it correctly handles semicolons inside single-qu
 strings, `--` line comments, `/* */` block comments, and `$tag$...$tag$` dollar-quoted
 bodies (PL/pgSQL functions, triggers, etc.) — not a naive `split_on_char ';'`.
 
-### `Table.Make(SCHEMA)`
+### `Pg_table.Make(SCHEMA)`
 
 ```ocaml
 module type SCHEMA = sig
@@ -148,16 +148,16 @@ module type SCHEMA = sig
 end
 
 module Make (S : SCHEMA) : sig
-  val find   : Db.pool -> S.id -> (S.t option, Storage_error.t) result
-  val insert : Db.pool -> S.t  -> (unit, Storage_error.t) result
-  val delete : Db.pool -> S.id -> (unit, Storage_error.t) result
-  val list   : Db.pool -> ?limit:int -> ?offset:int -> unit -> (S.t list, Storage_error.t) result
+  val find   : Pg_db.pool -> S.id -> (S.t option, Pg_error.t) result
+  val insert : Pg_db.pool -> S.t  -> (unit, Pg_error.t) result
+  val delete : Pg_db.pool -> S.id -> (unit, Pg_error.t) result
+  val list   : Pg_db.pool -> ?limit:int -> ?offset:int -> unit -> (S.t list, Pg_error.t) result
 end
 ```
 
-`table`, `id_column`, and each entry in `columns` are validated once when `Table.Make`
+`table`, `id_column`, and each entry in `columns` are validated once when `Pg_table.Make`
 is applied. They must be unquoted SQL identifiers matching `[A-Za-z_][A-Za-z0-9_]*`;
-quoted and schema-qualified identifiers are rejected — `Table.Make` interpolates them
+quoted and schema-qualified identifiers are rejected — `Pg_table.Make` interpolates them
 into generated SQL without quoting.
 
 ```ocaml
@@ -176,7 +176,7 @@ module UserSchema = struct
   let get_id u = u.id
 end
 
-module Users = Table.Make(UserSchema)
+module Users = Pg_table.Make(UserSchema)
 
 let _ = Users.insert pool { id = 1; name = "Alice"; email = "alice@example.com" }
 let _ = Users.find   pool 1
@@ -199,15 +199,21 @@ with `(env :> Caqti_eio.stdenv)`.
 ## Design Notes
 
 - `pool` hides the underlying `caqti` pool's type variable behind a polymorphic record
-  field (`{ use_conn : 'b. (Caqti_eio.connection -> ('b, Storage_error.t) result) -> ... }`),
+  field (`{ use_conn : 'b. (Caqti_eio.connection -> ('b, Pg_error.t) result) -> ... }`),
   so callers never see a `caqti` type parameter.
-- `Db`, `Migration`, and `Table` are flat, unwrapped top-level modules (matching the
-  same shape as this author's sibling packages `kafka-eio-core` and `obs-eio`). `Db`
-  and `Table` are common enough names that a consuming project should watch for
-  collisions if it also depends on another library exposing the same bare module name.
+- `Pg_error`, `Pg_db`, `Migration`, and `Pg_table` are flat, unwrapped top-level modules
+  (matching the same shape as this author's sibling packages `kafka-eio-core` and
+  `obs-eio`). They were originally named `Storage_error`/`Db`/`Table` — names that read
+  as backend-agnostic while the implementation is 100% Postgres-specific (`Pg_db.create_pool`
+  takes a `Caqti_eio.stdenv` directly; no second backend has ever been built or planned).
+  Renamed to be honest about what this package is, matching every sibling package's own
+  convention of naming things after the backend it actually is (`S3_client` in `s3-eio`,
+  `Kafka_service` in `kafka-eio-service`). `Migration` keeps its generic name since
+  nothing about migration-running itself implies backend-agnosticism the way `Db`/`Table`
+  did.
 
 ## Out of Scope
 
-- Update/upsert helpers (use `Db.exec` with a hand-written query)
+- Update/upsert helpers (use `Pg_db.exec` with a hand-written query)
 - Query builder / DSL
 - Multiple database backends (PostgreSQL is the only supported backend)

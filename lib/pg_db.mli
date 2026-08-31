@@ -14,28 +14,28 @@ val create_pool
   -> sw:Eio.Switch.t
   -> stdenv:Caqti_eio.stdenv
   -> unit
-  -> (pool, Storage_error.t) result
+  -> (pool, Pg_error.t) result
 
 (** Execute a statement that returns no rows. *)
 val exec
   :  pool
   -> ('p, unit, [< `Zero]) Request.t
   -> 'p
-  -> (unit, Storage_error.t) result
+  -> (unit, Pg_error.t) result
 
 (** Return zero or one row. *)
 val find
   :  pool
   -> ('p, 'r, [< `Zero | `One]) Request.t
   -> 'p
-  -> ('r option, Storage_error.t) result
+  -> ('r option, Pg_error.t) result
 
 (** Return all matching rows as a list. *)
 val collect
   :  pool
   -> ('p, 'r, [< `Zero | `One | `Many]) Request.t
   -> 'p
-  -> ('r list, Storage_error.t) result
+  -> ('r list, Pg_error.t) result
 
 (** Run [f] inside a database transaction.
 
@@ -44,5 +44,5 @@ val collect
     exceptions still propagate. *)
 val transaction
   :  pool
-  -> (pool -> ('a, Storage_error.t) result)
-  -> ('a, Storage_error.t) result
+  -> (pool -> ('a, Pg_error.t) result)
+  -> ('a, Pg_error.t) result
