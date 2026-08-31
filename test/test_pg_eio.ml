@@ -6,7 +6,10 @@ let or_fail = function
   | Ok v    -> v
   | Error e -> Alcotest.failf "%s" (Pg_error.to_string e)
 
-let postgres_url () = Sys.getenv_opt "POSTGRES_URL"
+let postgres_url () =
+  match Sys.getenv_opt "POSTGRES_URL" with
+  | Some "" -> None
+  | v -> v
 
 (* ── Unit tests (no database) ───────────────────────────────────────────── *)
 
