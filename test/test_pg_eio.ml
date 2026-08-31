@@ -170,6 +170,32 @@ let test_pool_create () =
                |> or_fail in
     ignore pool
 
+let test_of_env_uses_postgres_url () =
+  match postgres_url () with
+  | None     ->
+    Printf.printf "[skip] POSTGRES_URL not set — skipping of_env test\n%!"
+  | Some _url ->
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let pool = Pg_db.of_env ~sw ~stdenv:(env :> Caqti_eio.stdenv) () |> or_fail in
+    ignore pool
+
+let test_of_env_rejects_missing_url () =
+  let saved = Sys.getenv_opt "POSTGRES_URL" in
+  Fun.protect
+    ~finally:(fun () ->
+      match saved with
+      | Some v -> Unix.putenv "POSTGRES_URL" v
+      | None -> Unix.putenv "POSTGRES_URL" "")
+    (fun () ->
+      Unix.putenv "POSTGRES_URL" "";
+      Eio_main.run @@ fun env ->
+      Eio.Switch.run @@ fun sw ->
+      match Pg_db.of_env ~sw ~stdenv:(env :> Caqti_eio.stdenv) () with
+      | Ok _ -> Alcotest.fail "expected an error when POSTGRES_URL is unset"
+      | Error (Pg_error.Connection_error _) -> ()
+      | Error e -> Alcotest.failf "unexpected error: %s" (Pg_error.to_string e))
+
 let test_exec_find_collect () =
   match postgres_url () with
   | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
@@ -662,6 +688,8 @@ let () =
     ];
     "integration", [
       test_case "pool_create"         `Quick test_pool_create;
+      test_case "of_env_uses_postgres_url"  `Quick test_of_env_uses_postgres_url;
+      test_case "of_env_rejects_missing_url" `Quick test_of_env_rejects_missing_url;
       test_case "exec_find_collect"   `Quick test_exec_find_collect;
       test_case "transaction_commit"  `Quick test_transaction_commit;
       test_case "transaction_rollback"`Quick test_transaction_rollback;
