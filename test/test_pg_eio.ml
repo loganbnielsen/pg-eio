@@ -371,10 +371,10 @@ let test_migration_apply () =
     write_file "0002_add_index.sql"
       "CREATE INDEX IF NOT EXISTS sun_mig_items_id ON sun_mig_items (id)";
     let mtable = Printf.sprintf "sun_test_mig_%d" (Random.int 1000000) in
-    or_fail (Migration.apply pool ~dir ~table:mtable);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
     (* idempotent — applying again is a no-op *)
-    or_fail (Migration.apply pool ~dir ~table:mtable);
-    let s = or_fail (Migration.status pool ~dir ~table:mtable) in
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
+    let s = or_fail (Migration.status ~fs:env#fs pool ~dir ~table:mtable) in
     Alcotest.(check int) "two migrations recorded" 2 (List.length s);
     List.iter (fun ms ->
       Alcotest.(check bool) (Printf.sprintf "v%d applied" ms.Migration.version)
@@ -417,7 +417,7 @@ let test_migration_semicolon_in_string () =
         {|CREATE TABLE IF NOT EXISTS %s (id INT, note TEXT);
 INSERT INTO %s (id, note) VALUES (1, 'hello; world');
 INSERT INTO %s (id, note) VALUES (2, 'foo; bar; baz');|} tbl tbl tbl);
-    or_fail (Migration.apply pool ~dir ~table:mtable);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
     let count_q =
       Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true
         (Printf.sprintf "SELECT count(*)::int FROM %s" tbl)
@@ -453,7 +453,7 @@ BEGIN
 END;
 $$;
 SELECT %s();|} tbl fn_name tbl fn_name);
-    or_fail (Migration.apply pool ~dir ~table:mtable);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
     let find_q =
       Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.int) ~oneshot:true
         (Printf.sprintf "SELECT id FROM %s LIMIT 1" tbl)
@@ -487,7 +487,7 @@ let test_migration_insert_returning () =
       (Printf.sprintf
         {|CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, note TEXT);
 INSERT INTO %s (note) VALUES ('hello') RETURNING id;|} tbl tbl);
-    or_fail (Migration.apply pool ~dir ~table:mtable);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
     let count_q =
       Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true
         (Printf.sprintf "SELECT count(*)::int FROM %s" tbl)
@@ -522,7 +522,7 @@ let test_migration_insert_with_returning_in_string_literal () =
         {|CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, note TEXT);
 -- a comment mentioning returning should not count either
 INSERT INTO %s (note) VALUES ('now returning to base');|} tbl tbl);
-    or_fail (Migration.apply pool ~dir ~table:mtable);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
     let count_q =
       Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true
         (Printf.sprintf "SELECT count(*)::int FROM %s" tbl)
@@ -555,8 +555,8 @@ let test_migration_rollback_down_sql () =
 INSERT INTO %s (id, note) VALUES (1, 'value; with; semis');|} tbl tbl);
     write (Printf.sprintf "0001_create_%s.down.sql" tbl)
       (Printf.sprintf "DROP TABLE IF EXISTS %s" tbl);
-    or_fail (Migration.apply pool ~dir ~table:mtable);
-    or_fail (Migration.rollback pool ~dir ~table:mtable);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
+    or_fail (Migration.rollback ~fs:env#fs pool ~dir ~table:mtable);
     let exists_q =
       Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.int) ~oneshot:true
         {|SELECT 1 FROM information_schema.tables
@@ -580,7 +580,7 @@ let test_migration_rejects_unsafe_table_name () =
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     with_migration_dir @@ fun dir _write ->
-    (match Migration.apply pool ~dir ~table:"sun_migrations; DROP TABLE users; --" with
+    (match Migration.apply ~fs:env#fs pool ~dir ~table:"sun_migrations; DROP TABLE users; --" with
      | Ok () -> Alcotest.fail "expected an unsafe migrations table name to be rejected"
      | Error (Storage_error.Migration_error _) -> ()
      | Error e ->

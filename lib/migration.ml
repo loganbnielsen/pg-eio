@@ -20,18 +20,32 @@ let parse_filename f =
        | None   -> None
        | Some v -> Some (v, String.concat "_" rest))
 
-let read_migrations dir =
-  match Sys.readdir dir with
-  | exception Sys_error msg ->
-    Error (Storage_error.Migration_error ("cannot read migrations dir: " ^ msg))
+let fs_path fs path = Eio.Path.(fs / path)
+
+let read_migrations ~fs dir =
+  match Eio.Path.read_dir (fs_path fs dir) with
+  | exception (Eio.Io _ as exn) ->
+    Error (Storage_error.Migration_error ("cannot read migrations dir: " ^ Printexc.to_string exn))
   | files ->
-    let parsed = Array.to_list files |> List.filter_map (fun f ->
+    let parsed = files |> List.filter_map (fun f ->
       match parse_filename f with
       | None           -> None
       | Some (v, name) -> Some (v, name, Filename.concat dir f))
     in
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare a b) parsed in
     Ok sorted
+
+let read_file ~fs file =
+  match Eio.Path.load (fs_path fs file) with
+  | s -> Ok s
+  | exception (Eio.Io _ as exn) ->
+    Error (Storage_error.Migration_error ("cannot read " ^ file ^ ": " ^ Printexc.to_string exn))
+
+let is_file ~fs file =
+  match Eio.Path.is_file (fs_path fs file) with
+  | is_file -> Ok is_file
+  | exception (Eio.Io _ as exn) ->
+    Error (Storage_error.Migration_error ("cannot stat " ^ file ^ ": " ^ Printexc.to_string exn))
 
 (* A grammar, not an index-jumping scanner: a SQL file is a sequence of
    tokens, each either one character of real code, a statement-separating
@@ -232,23 +246,18 @@ let validate_table table =
   | Error _ -> Error (Storage_error.Migration_error
       (Printf.sprintf "invalid migrations table name %S; expected [A-Za-z_][A-Za-z0-9_]*" table))
 
-let apply ?(table = default_table) pool ~dir =
+let apply ?(table = default_table) ~fs pool ~dir =
   let wrap msg = Result.map_error (fun e ->
     Storage_error.Migration_error (msg ^ Storage_error.to_string e))
   in
   let* table = validate_table table in
   let* () = ensure_table table pool |> wrap "create migrations table: " in
-  let* migrations = read_migrations dir in
+  let* migrations = read_migrations ~fs dir in
   let* applied = applied_versions table pool |> wrap "query applied migrations: " in
   let pending = List.filter (fun (v, _, _) -> not (List.mem v applied)) migrations in
   List.fold_left (fun acc (version, name, path) ->
     let* () = acc in
-    let* sql =
-      match In_channel.with_open_text path In_channel.input_all with
-      | s -> Ok s
-      | exception Sys_error msg ->
-        Error (Storage_error.Migration_error ("cannot read " ^ path ^ ": " ^ msg))
-    in
+    let* sql = read_file ~fs path in
     Db.transaction pool (fun pool ->
       let* () = exec_statements pool (split_sql_statements sql) in
       record_migration table pool version name
@@ -259,13 +268,13 @@ let apply ?(table = default_table) pool ~dir =
           version name (Storage_error.to_string e)))
   ) (Ok ()) pending
 
-let status ?(table = default_table) pool ~dir =
+let status ?(table = default_table) ~fs pool ~dir =
   let wrap msg = Result.map_error (fun e ->
     Storage_error.Migration_error (msg ^ Storage_error.to_string e))
   in
   let* table = validate_table table in
   let* () = ensure_table table pool |> wrap "create migrations table: " in
-  let* migrations = read_migrations dir in
+  let* migrations = read_migrations ~fs dir in
   let row_q = applied_at_q table in
   List.fold_right (fun (version, name, _) acc ->
     let* rows = acc in
@@ -275,7 +284,7 @@ let status ?(table = default_table) pool ~dir =
 
 (** Roll back the last applied migration using a companion .down.sql file.
     Expects e.g. db/migrations/0001_notifications.down.sql alongside the up file. *)
-let rollback ?(table = default_table) pool ~dir =
+let rollback ?(table = default_table) ~fs pool ~dir =
   let wrap msg = Result.map_error (fun e ->
     Storage_error.Migration_error (msg ^ Storage_error.to_string e))
   in
@@ -289,18 +298,14 @@ let rollback ?(table = default_table) pool ~dir =
   | Some (version, name) ->
     let down_file = Printf.sprintf "%04d_%s.down.sql" version name in
     let down_path = Filename.concat dir down_file in
-    if not (Sys.file_exists down_path) then
+    let* down_exists = is_file ~fs down_path in
+    if not down_exists then
       Error (Storage_error.Migration_error (Printf.sprintf
         "no down-migration file found for version %04d (%s).\n\
          Create %s with the reverse SQL and retry."
         version name down_path))
     else
-      let* sql =
-        match In_channel.with_open_text down_path In_channel.input_all with
-        | s -> Ok s
-        | exception Sys_error msg ->
-          Error (Storage_error.Migration_error ("cannot read " ^ down_path ^ ": " ^ msg))
-      in
+      let* sql = read_file ~fs down_path in
       Db.transaction pool (fun pool ->
         let* () = exec_statements pool (split_sql_statements sql) in
         Db.exec pool (delete_version_q table) version
