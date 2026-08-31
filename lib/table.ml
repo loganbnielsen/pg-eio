@@ -149,10 +149,9 @@ module Make (S : SCHEMA) = struct
   let insert pool row = Db.exec    pool insert_q  row
   let delete pool id  = Db.exec    pool delete_q  id
 
-  let list pool ?(limit = 100) ?(offset = 0) () =
-    match Limit.of_int limit, Offset.of_int offset with
-    | Ok limit, Ok offset ->
-      Db.collect pool list_q (Limit.to_int limit, Offset.to_int offset)
-    | Error e, _ | _, Error e ->
-      Error e
+  let default_limit = Result.get_ok (Limit.of_int 100)
+  let default_offset = Result.get_ok (Offset.of_int 0)
+
+  let list pool ?(limit = default_limit) ?(offset = default_offset) () =
+    Db.collect pool list_q (Limit.to_int limit, Offset.to_int offset)
 end

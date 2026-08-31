@@ -60,8 +60,15 @@ module Make (S : SCHEMA) : sig
   val delete : Db.pool -> S.id  -> (unit, Storage_error.t) result
   val list
     :  Db.pool
-    -> ?limit:int
-    -> ?offset:int
+    -> ?limit:Limit.t
+    -> ?offset:Offset.t
     -> unit
     -> (S.t list, Storage_error.t) result
+  (** Defaults to a limit of 100 rows starting at offset 0. Takes the
+      validated [Limit.t]/[Offset.t] types directly (rather than raw [int])
+      so a caller who already validated a value once — e.g. parsing a
+      [?limit=] query param at an HTTP route boundary — can pass it straight
+      through instead of paying the runtime check again, and so an invalid
+      value is rejected at [Limit.of_int]/[Offset.of_int], not folded into
+      the same [Storage_error.t] a genuine connection failure would produce. *)
 end

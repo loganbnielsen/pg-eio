@@ -625,6 +625,8 @@ let test_table_make () =
       (Option.map (fun u -> u.UserSchema.name) alice);
     let all = or_fail (U.list pool ()) in
     Alcotest.(check int) "list count" 2 (List.length all);
+    let limited = or_fail (U.list pool ~limit:(Result.get_ok (Table.Limit.of_int 1)) ()) in
+    Alcotest.(check int) "list respects a caller-supplied Limit.t" 1 (List.length limited);
     or_fail (U.delete pool 1);
     let gone = or_fail (U.find pool 1) in
     Alcotest.(check (option string)) "deleted" None
