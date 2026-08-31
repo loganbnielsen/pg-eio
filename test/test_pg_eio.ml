@@ -14,7 +14,6 @@ let test_error_to_string () =
   let cases = [
     Storage_error.Connection_error "timeout",    "connection failed: timeout";
     Storage_error.Query_error "syntax",           "query error: syntax";
-    Storage_error.Not_found,                      "not found";
     Storage_error.Constraint_error "unique",  "constraint violation: unique";
     Storage_error.Migration_error "bad file",     "migration error: bad file";
   ] in

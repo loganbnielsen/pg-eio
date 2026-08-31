@@ -8,6 +8,18 @@
   `Query_error`s after rollback instead of leaking an exception path.
 - `Table.Identifier.of_string_exn` is no longer part of the installed
   interface; callers should use the `result`-returning `of_string`.
+- `Migration.apply`/`status`/`rollback` classify constraint violations and
+  detect `RETURNING` clauses to route statements through `Db.exec` vs.
+  `Db.collect` correctly (#12); `RETURNING` detection no longer matches
+  inside string literals, comments, or dollar-quoted blocks (#13); statement
+  splitting and `RETURNING` detection now run on an Angstrom grammar instead
+  of a hand-rolled scanner, adding `angstrom` as a new direct dependency
+  (#14).
+- `Migration.apply`/`status`/`rollback` now take a required `~fs` capability
+  and read migration files via `Eio.Path` instead of blocking
+  `Sys`/`In_channel` calls (#15).
+- `Storage_error.Not_found` removed — it had zero producers; `Db.find` and
+  `Table.Make.find` already signal an absent row via `'r option`.
 
 ## 0.1.0
 
