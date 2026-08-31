@@ -4,7 +4,7 @@ let ( let* ) = Result.bind
 
 let or_fail = function
   | Ok v    -> v
-  | Error e -> Alcotest.failf "%s" (Storage_error.to_string e)
+  | Error e -> Alcotest.failf "%s" (Pg_error.to_string e)
 
 let postgres_url () = Sys.getenv_opt "POSTGRES_URL"
 
@@ -12,13 +12,13 @@ let postgres_url () = Sys.getenv_opt "POSTGRES_URL"
 
 let test_error_to_string () =
   let cases = [
-    Storage_error.Connection_error "timeout",    "connection failed: timeout";
-    Storage_error.Query_error "syntax",           "query error: syntax";
-    Storage_error.Constraint_error "unique",  "constraint violation: unique";
-    Storage_error.Migration_error "bad file",     "migration error: bad file";
+    Pg_error.Connection_error "timeout",    "connection failed: timeout";
+    Pg_error.Query_error "syntax",           "query error: syntax";
+    Pg_error.Constraint_error "unique",  "constraint violation: unique";
+    Pg_error.Migration_error "bad file",     "migration error: bad file";
   ] in
   List.iter (fun (err, expected) ->
-    Alcotest.(check string) "to_string" expected (Storage_error.to_string err)
+    Alcotest.(check string) "to_string" expected (Pg_error.to_string err)
   ) cases
 
 let test_create_pool_rejects_invalid_pool_size () =
@@ -27,12 +27,12 @@ let test_create_pool_rejects_invalid_pool_size () =
   List.iter
     (fun pool_size ->
       match
-        Db.create_pool ~url:"postgresql://localhost/not-used" ~pool_size ~sw
+        Pg_db.create_pool ~url:"postgresql://localhost/not-used" ~pool_size ~sw
           ~stdenv:(env :> Caqti_eio.stdenv) ()
       with
-      | Error (Storage_error.Connection_error msg) ->
+      | Error (Pg_error.Connection_error msg) ->
         Alcotest.(check string) "pool_size error" "pool_size must be positive" msg
-      | Error err -> Alcotest.failf "unexpected error: %s" (Storage_error.to_string err)
+      | Error err -> Alcotest.failf "unexpected error: %s" (Pg_error.to_string err)
       | Ok _ -> Alcotest.failf "expected invalid pool_size: %d" pool_size)
     [ 0; -1 ]
 
@@ -63,38 +63,38 @@ let test_migration_parse_filename () =
 let test_table_limit_rejects_non_positive () =
   let cases = [0; -1] in
   List.iter (fun limit ->
-    match Table.Limit.of_int limit with
+    match Pg_table.Limit.of_int limit with
     | Ok _ ->
       Alcotest.failf "expected invalid table list limit: %d" limit
-    | Error (Storage_error.Query_error msg) ->
+    | Error (Pg_error.Query_error msg) ->
       Alcotest.(check string)
         "limit error"
         "table list limit must be positive"
         msg
     | Error err ->
-      Alcotest.failf "unexpected error: %s" (Storage_error.to_string err)
+      Alcotest.failf "unexpected error: %s" (Pg_error.to_string err)
   ) cases
 
 let test_table_offset_rejects_negative () =
-  match Table.Offset.of_int (-1) with
+  match Pg_table.Offset.of_int (-1) with
   | Ok _ ->
     Alcotest.fail "expected invalid table list offset"
-  | Error (Storage_error.Query_error msg) ->
+  | Error (Pg_error.Query_error msg) ->
     Alcotest.(check string)
       "offset error"
       "table list offset must be non-negative"
       msg
   | Error err ->
-    Alcotest.failf "unexpected error: %s" (Storage_error.to_string err)
+    Alcotest.failf "unexpected error: %s" (Pg_error.to_string err)
 
 let assert_invalid_identifier kind name expected =
-  match Table.Identifier.of_string ~kind name with
+  match Pg_table.Identifier.of_string ~kind name with
   | Ok _ ->
     Alcotest.failf "expected invalid %s identifier: %S" kind name
-  | Error (Storage_error.Query_error msg) ->
+  | Error (Pg_error.Query_error msg) ->
     Alcotest.(check string) "identifier error" expected msg
   | Error err ->
-    Alcotest.failf "unexpected error: %s" (Storage_error.to_string err)
+    Alcotest.failf "unexpected error: %s" (Pg_error.to_string err)
 
 let apply_schema ~table ~id_column ~columns =
   let module Schema = struct
@@ -107,7 +107,7 @@ let apply_schema ~table ~id_column ~columns =
     let id_type = Caqti_type.int
     let get_id id = id
   end in
-  let module _ = Table.Make(Schema) in
+  let module _ = Pg_table.Make(Schema) in
   ()
 
 let assert_invalid_schema label f expected =
@@ -165,7 +165,7 @@ let test_pool_create () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     ignore pool
@@ -176,7 +176,7 @@ let test_exec_find_collect () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     let create_q =
@@ -199,16 +199,16 @@ let test_exec_find_collect () =
       Caqti_request.Infix.(Caqti_type.unit ->* Caqti_type.(t2 int string))
         "SELECT id, name FROM sun_test_items ORDER BY id"
     in
-    or_fail (Db.exec pool create_q ());
-    or_fail (Db.exec pool insert_q (1, "apple"));
-    or_fail (Db.exec pool insert_q (2, "banana"));
-    let found = or_fail (Db.find pool find_q 1) in
+    or_fail (Pg_db.exec pool create_q ());
+    or_fail (Pg_db.exec pool insert_q (1, "apple"));
+    or_fail (Pg_db.exec pool insert_q (2, "banana"));
+    let found = or_fail (Pg_db.find pool find_q 1) in
     Alcotest.(check (option string)) "find by id" (Some "apple") found;
-    let all = or_fail (Db.collect pool all_q ()) in
+    let all = or_fail (Pg_db.collect pool all_q ()) in
     Alcotest.(check int) "collect count" 2 (List.length all);
-    let missing = or_fail (Db.find pool find_q 99) in
+    let missing = or_fail (Pg_db.find pool find_q 99) in
     Alcotest.(check (option string)) "missing returns None" None missing;
-    or_fail (Db.exec pool drop_q ())
+    or_fail (Pg_db.exec pool drop_q ())
 
 let test_transaction_commit () =
   match postgres_url () with
@@ -216,7 +216,7 @@ let test_transaction_commit () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     let create_q =
@@ -235,14 +235,14 @@ let test_transaction_commit () =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         "DROP TABLE IF EXISTS sun_test_tx"
     in
-    or_fail (Db.exec pool create_q ());
-    or_fail (Db.transaction pool (fun p ->
-      let* () = Db.exec p insert_q 1 in
-      Db.exec p insert_q 2
+    or_fail (Pg_db.exec pool create_q ());
+    or_fail (Pg_db.transaction pool (fun p ->
+      let* () = Pg_db.exec p insert_q 1 in
+      Pg_db.exec p insert_q 2
     ));
-    let n = or_fail (Db.find pool count_q ()) in
+    let n = or_fail (Pg_db.find pool count_q ()) in
     Alcotest.(check (option int)) "committed rows" (Some 2) n;
-    or_fail (Db.exec pool drop_q ())
+    or_fail (Pg_db.exec pool drop_q ())
 
 let test_transaction_rollback () =
   match postgres_url () with
@@ -250,7 +250,7 @@ let test_transaction_rollback () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     let create_q =
@@ -269,14 +269,14 @@ let test_transaction_rollback () =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         "DROP TABLE IF EXISTS sun_test_rb"
     in
-    or_fail (Db.exec pool create_q ());
-    let _ = Db.transaction pool (fun p ->
-      let* () = Db.exec p insert_q 1 in
-      Error (Storage_error.Query_error "intentional rollback")
+    or_fail (Pg_db.exec pool create_q ());
+    let _ = Pg_db.transaction pool (fun p ->
+      let* () = Pg_db.exec p insert_q 1 in
+      Error (Pg_error.Query_error "intentional rollback")
     ) in
-    let n = or_fail (Db.find pool count_q ()) in
+    let n = or_fail (Pg_db.find pool count_q ()) in
     Alcotest.(check (option int)) "rolled back — zero rows" (Some 0) n;
-    or_fail (Db.exec pool drop_q ())
+    or_fail (Pg_db.exec pool drop_q ())
 
 let test_transaction_rollback_on_exception () =
   match postgres_url () with
@@ -284,7 +284,7 @@ let test_transaction_rollback_on_exception () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     let create_q =
@@ -303,20 +303,20 @@ let test_transaction_rollback_on_exception () =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         "DROP TABLE IF EXISTS sun_test_tx_exn"
     in
-    or_fail (Db.exec pool create_q ());
+    or_fail (Pg_db.exec pool create_q ());
     let result =
-      Db.transaction pool (fun p ->
-        or_fail (Db.exec p insert_q 1);
+      Pg_db.transaction pool (fun p ->
+        or_fail (Pg_db.exec p insert_q 1);
         raise Exit)
     in
     Alcotest.(check bool) "callback exception is returned as Error" true
       (match result with
-       | Error (Storage_error.Query_error msg) ->
+       | Error (Pg_error.Query_error msg) ->
          String.starts_with ~prefix:"transaction callback raised:" msg
        | _ -> false);
-    let n = or_fail (Db.find pool count_q ()) in
+    let n = or_fail (Pg_db.find pool count_q ()) in
     Alcotest.(check (option int)) "raised transaction rolled back" (Some 0) n;
-    or_fail (Db.exec pool drop_q ())
+    or_fail (Pg_db.exec pool drop_q ())
 
 let test_transaction_unique_violation_maps_to_constraint_error () =
   match postgres_url () with
@@ -324,7 +324,7 @@ let test_transaction_unique_violation_maps_to_constraint_error () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     let create_q =
@@ -339,13 +339,13 @@ let test_transaction_unique_violation_maps_to_constraint_error () =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         "DROP TABLE IF EXISTS sun_test_uniq"
     in
-    or_fail (Db.exec pool create_q ());
-    or_fail (Db.exec pool insert_q 1);
-    (match Db.exec pool insert_q 1 with
-     | Error (Storage_error.Constraint_error _) -> ()
-     | Error e -> Alcotest.failf "expected Constraint_error, got: %s" (Storage_error.to_string e)
+    or_fail (Pg_db.exec pool create_q ());
+    or_fail (Pg_db.exec pool insert_q 1);
+    (match Pg_db.exec pool insert_q 1 with
+     | Error (Pg_error.Constraint_error _) -> ()
+     | Error e -> Alcotest.failf "expected Constraint_error, got: %s" (Pg_error.to_string e)
      | Ok () -> Alcotest.fail "expected duplicate key to be rejected");
-    or_fail (Db.exec pool drop_q ())
+    or_fail (Pg_db.exec pool drop_q ())
 
 let test_migration_apply () =
   match postgres_url () with
@@ -353,7 +353,7 @@ let test_migration_apply () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     let dir = Filename.get_temp_dir_name () ^ "/sun_migration_test_" ^
@@ -383,7 +383,7 @@ let test_migration_apply () =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         (Printf.sprintf "DROP TABLE IF EXISTS sun_mig_items, %s" mtable)
     in
-    or_fail (Db.exec pool drop_q ())
+    or_fail (Pg_db.exec pool drop_q ())
 
 let with_migration_dir f =
   let dir = Filename.get_temp_dir_name () ^ "/sun_mig_" ^
@@ -405,7 +405,7 @@ let test_migration_semicolon_in_string () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     with_migration_dir @@ fun dir write ->
@@ -421,13 +421,13 @@ INSERT INTO %s (id, note) VALUES (2, 'foo; bar; baz');|} tbl tbl tbl);
       Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true
         (Printf.sprintf "SELECT count(*)::int FROM %s" tbl)
     in
-    let n = or_fail (Db.find pool count_q ()) in
+    let n = or_fail (Pg_db.find pool count_q ()) in
     Alcotest.(check (option int)) "rows with semicolons in strings" (Some 2) n;
     let cleanup_q =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
     in
-    or_fail (Db.exec pool cleanup_q ())
+    or_fail (Pg_db.exec pool cleanup_q ())
 
 let test_migration_dollar_quoted () =
   match postgres_url () with
@@ -435,7 +435,7 @@ let test_migration_dollar_quoted () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     with_migration_dir @@ fun dir write ->
@@ -457,7 +457,7 @@ SELECT %s();|} tbl fn_name tbl fn_name);
       Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.int) ~oneshot:true
         (Printf.sprintf "SELECT id FROM %s LIMIT 1" tbl)
     in
-    let v = or_fail (Db.find pool find_q ()) in
+    let v = or_fail (Pg_db.find pool find_q ()) in
     Alcotest.(check (option int)) "row inserted via dollar-quoted fn" (Some 99) v;
     let drop_fn_q =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
@@ -467,8 +467,8 @@ SELECT %s();|} tbl fn_name tbl fn_name);
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
     in
-    or_fail (Db.exec pool drop_fn_q ());
-    or_fail (Db.exec pool drop_tbl_q ())
+    or_fail (Pg_db.exec pool drop_fn_q ());
+    or_fail (Pg_db.exec pool drop_tbl_q ())
 
 let test_migration_insert_returning () =
   match postgres_url () with
@@ -476,7 +476,7 @@ let test_migration_insert_returning () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     with_migration_dir @@ fun dir write ->
@@ -491,13 +491,13 @@ INSERT INTO %s (note) VALUES ('hello') RETURNING id;|} tbl tbl);
       Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true
         (Printf.sprintf "SELECT count(*)::int FROM %s" tbl)
     in
-    let n = or_fail (Db.find pool count_q ()) in
+    let n = or_fail (Pg_db.find pool count_q ()) in
     Alcotest.(check (option int)) "row inserted via a RETURNING statement" (Some 1) n;
     let cleanup_q =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
     in
-    or_fail (Db.exec pool cleanup_q ())
+    or_fail (Pg_db.exec pool cleanup_q ())
 
 (* Regression test: returns_rows used to substring-match "RETURNING"
    anywhere in the raw statement text, including inside string literals —
@@ -510,7 +510,7 @@ let test_migration_insert_with_returning_in_string_literal () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     with_migration_dir @@ fun dir write ->
@@ -526,14 +526,14 @@ INSERT INTO %s (note) VALUES ('now returning to base');|} tbl tbl);
       Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true
         (Printf.sprintf "SELECT count(*)::int FROM %s" tbl)
     in
-    let n = or_fail (Db.find pool count_q ()) in
+    let n = or_fail (Pg_db.find pool count_q ()) in
     Alcotest.(check (option int))
       "row inserted despite 'returning' appearing inside a string/comment" (Some 1) n;
     let cleanup_q =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
     in
-    or_fail (Db.exec pool cleanup_q ())
+    or_fail (Pg_db.exec pool cleanup_q ())
 
 let test_migration_rollback_down_sql () =
   match postgres_url () with
@@ -541,7 +541,7 @@ let test_migration_rollback_down_sql () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     with_migration_dir @@ fun dir write ->
@@ -561,13 +561,13 @@ INSERT INTO %s (id, note) VALUES (1, 'value; with; semis');|} tbl tbl);
         {|SELECT 1 FROM information_schema.tables
           WHERE table_name = ? AND table_schema = 'public'|}
     in
-    let v = or_fail (Db.find pool exists_q tbl) in
+    let v = or_fail (Pg_db.find pool exists_q tbl) in
     Alcotest.(check (option int)) "table dropped after rollback" None v;
     let cleanup_q =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         (Printf.sprintf "DROP TABLE IF EXISTS %s" mtable)
     in
-    or_fail (Db.exec pool cleanup_q ())
+    or_fail (Pg_db.exec pool cleanup_q ())
 
 let test_migration_rejects_unsafe_table_name () =
   match postgres_url () with
@@ -575,15 +575,15 @@ let test_migration_rejects_unsafe_table_name () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     with_migration_dir @@ fun dir _write ->
     (match Migration.apply ~fs:env#fs pool ~dir ~table:"sun_migrations; DROP TABLE users; --" with
      | Ok () -> Alcotest.fail "expected an unsafe migrations table name to be rejected"
-     | Error (Storage_error.Migration_error _) -> ()
+     | Error (Pg_error.Migration_error _) -> ()
      | Error e ->
-       Alcotest.failf "expected Migration_error, got: %s" (Storage_error.to_string e))
+       Alcotest.failf "expected Migration_error, got: %s" (Pg_error.to_string e))
 
 let test_table_make () =
   match postgres_url () with
@@ -591,7 +591,7 @@ let test_table_make () =
   | Some url ->
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let pool = Db.create_pool ~url ~sw
+    let pool = Pg_db.create_pool ~url ~sw
                  ~stdenv:(env :> Caqti_eio.stdenv) ()
                |> or_fail in
     let create_q =
@@ -602,7 +602,7 @@ let test_table_make () =
       Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
         "DROP TABLE IF EXISTS sun_test_users"
     in
-    or_fail (Db.exec pool create_q ());
+    or_fail (Pg_db.exec pool create_q ());
     let module UserSchema = struct
       let table     = "sun_test_users"
       let id_column = "id"
@@ -617,7 +617,7 @@ let test_table_make () =
       let id_type = Caqti_type.int
       let get_id u = u.id
     end in
-    let module U = Table.Make(UserSchema) in
+    let module U = Pg_table.Make(UserSchema) in
     or_fail (U.insert pool { UserSchema.id = 1; name = "Alice"; email = "alice@example.com" });
     or_fail (U.insert pool { UserSchema.id = 2; name = "Bob";   email = "bob@example.com"   });
     let alice = or_fail (U.find pool 1) in
@@ -625,13 +625,13 @@ let test_table_make () =
       (Option.map (fun u -> u.UserSchema.name) alice);
     let all = or_fail (U.list pool ()) in
     Alcotest.(check int) "list count" 2 (List.length all);
-    let limited = or_fail (U.list pool ~limit:(Result.get_ok (Table.Limit.of_int 1)) ()) in
+    let limited = or_fail (U.list pool ~limit:(Result.get_ok (Pg_table.Limit.of_int 1)) ()) in
     Alcotest.(check int) "list respects a caller-supplied Limit.t" 1 (List.length limited);
     or_fail (U.delete pool 1);
     let gone = or_fail (U.find pool 1) in
     Alcotest.(check (option string)) "deleted" None
       (Option.map (fun u -> u.UserSchema.name) gone);
-    or_fail (Db.exec pool drop_q ())
+    or_fail (Pg_db.exec pool drop_q ())
 
 (* ── Runner ──────────────────────────────────────────────────────────────── *)
 

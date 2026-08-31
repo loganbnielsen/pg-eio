@@ -25,7 +25,7 @@ let fs_path fs path = Eio.Path.(fs / path)
 let read_migrations ~fs dir =
   match Eio.Path.read_dir (fs_path fs dir) with
   | exception (Eio.Io _ as exn) ->
-    Error (Storage_error.Migration_error ("cannot read migrations dir: " ^ Printexc.to_string exn))
+    Error (Pg_error.Migration_error ("cannot read migrations dir: " ^ Printexc.to_string exn))
   | files ->
     let parsed = files |> List.filter_map (fun f ->
       match parse_filename f with
@@ -39,13 +39,13 @@ let read_file ~fs file =
   match Eio.Path.load (fs_path fs file) with
   | s -> Ok s
   | exception (Eio.Io _ as exn) ->
-    Error (Storage_error.Migration_error ("cannot read " ^ file ^ ": " ^ Printexc.to_string exn))
+    Error (Pg_error.Migration_error ("cannot read " ^ file ^ ": " ^ Printexc.to_string exn))
 
 let is_file ~fs file =
   match Eio.Path.is_file (fs_path fs file) with
   | is_file -> Ok is_file
   | exception (Eio.Io _ as exn) ->
-    Error (Storage_error.Migration_error ("cannot stat " ^ file ^ ": " ^ Printexc.to_string exn))
+    Error (Pg_error.Migration_error ("cannot stat " ^ file ^ ": " ^ Printexc.to_string exn))
 
 (* A grammar, not an index-jumping scanner: a SQL file is a sequence of
    tokens, each either one character of real code, a statement-separating
@@ -190,12 +190,12 @@ let exec_statements pool stmts =
     | Ok () ->
       if returns_rows stmt then
         let q = Caqti_request.Infix.(Caqti_type.unit ->* Caqti_type.unit) ~oneshot:true stmt in
-        (match Db.collect pool q () with
+        (match Pg_db.collect pool q () with
          | Ok _   -> Ok ()
          | Error e -> Error e)
       else
         let q = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true stmt in
-        Db.exec pool q ()
+        Pg_db.exec pool q ()
   ) (Ok ()) stmts
 
 (* ── Per-table helpers (table name injected at call time) ───────────────── *)
@@ -209,19 +209,19 @@ let ensure_table table pool =
            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
          )|} table)
   in
-  Db.exec pool q ()
+  Pg_db.exec pool q ()
 
 let applied_versions table pool =
   let q = Caqti_request.Infix.(Caqti_type.unit ->* Caqti_type.int) ~oneshot:true
     (Printf.sprintf "SELECT version FROM %s ORDER BY version" table)
   in
-  Db.collect pool q ()
+  Pg_db.collect pool q ()
 
 let record_migration table pool version name =
   let q = Caqti_request.Infix.(Caqti_type.(t2 int string) ->. Caqti_type.unit) ~oneshot:true
     (Printf.sprintf "INSERT INTO %s (version, name) VALUES (?, ?)" table)
   in
-  Db.exec pool q (version, name)
+  Pg_db.exec pool q (version, name)
 
 let applied_at_q table =
   Caqti_request.Infix.(Caqti_type.int ->? Caqti_type.string) ~oneshot:true
@@ -239,16 +239,16 @@ let delete_version_q table =
 
 let default_table = "sun_schema_migrations"
 
-(* ~table is interpolated unquoted into SQL; reuse Table's identifier validator to prevent injection. *)
+(* ~table is interpolated unquoted into SQL; reuse Pg_table's identifier validator to prevent injection. *)
 let validate_table table =
-  match Table.Identifier.of_string ~kind:"migrations table" table with
-  | Ok id   -> Ok (Table.Identifier.to_string id)
-  | Error _ -> Error (Storage_error.Migration_error
+  match Pg_table.Identifier.of_string ~kind:"migrations table" table with
+  | Ok id   -> Ok (Pg_table.Identifier.to_string id)
+  | Error _ -> Error (Pg_error.Migration_error
       (Printf.sprintf "invalid migrations table name %S; expected [A-Za-z_][A-Za-z0-9_]*" table))
 
 let apply ?(table = default_table) ~fs pool ~dir =
   let wrap msg = Result.map_error (fun e ->
-    Storage_error.Migration_error (msg ^ Storage_error.to_string e))
+    Pg_error.Migration_error (msg ^ Pg_error.to_string e))
   in
   let* table = validate_table table in
   let* () = ensure_table table pool |> wrap "create migrations table: " in
@@ -258,19 +258,19 @@ let apply ?(table = default_table) ~fs pool ~dir =
   List.fold_left (fun acc (version, name, path) ->
     let* () = acc in
     let* sql = read_file ~fs path in
-    Db.transaction pool (fun pool ->
+    Pg_db.transaction pool (fun pool ->
       let* () = exec_statements pool (split_sql_statements sql) in
       record_migration table pool version name
     )
     |> Result.map_error (fun e ->
-      Storage_error.Migration_error (
+      Pg_error.Migration_error (
         Printf.sprintf "migration %04d (%s) failed: %s"
-          version name (Storage_error.to_string e)))
+          version name (Pg_error.to_string e)))
   ) (Ok ()) pending
 
 let status ?(table = default_table) ~fs pool ~dir =
   let wrap msg = Result.map_error (fun e ->
-    Storage_error.Migration_error (msg ^ Storage_error.to_string e))
+    Pg_error.Migration_error (msg ^ Pg_error.to_string e))
   in
   let* table = validate_table table in
   let* () = ensure_table table pool |> wrap "create migrations table: " in
@@ -278,7 +278,7 @@ let status ?(table = default_table) ~fs pool ~dir =
   let row_q = applied_at_q table in
   List.fold_right (fun (version, name, _) acc ->
     let* rows = acc in
-    let* applied_at = Db.find pool row_q version in
+    let* applied_at = Pg_db.find pool row_q version in
     Ok ({ version; name; applied_at } :: rows)
   ) migrations (Ok [])
 
@@ -286,34 +286,34 @@ let status ?(table = default_table) ~fs pool ~dir =
     Expects e.g. db/migrations/0001_notifications.down.sql alongside the up file. *)
 let rollback ?(table = default_table) ~fs pool ~dir =
   let wrap msg = Result.map_error (fun e ->
-    Storage_error.Migration_error (msg ^ Storage_error.to_string e))
+    Pg_error.Migration_error (msg ^ Pg_error.to_string e))
   in
   let* table = validate_table table in
   let* () = ensure_table table pool |> wrap "create migrations table: " in
-  let* last = Db.find pool (last_applied_q table) () in
+  let* last = Pg_db.find pool (last_applied_q table) () in
   match last with
   | None ->
-    Error (Storage_error.Migration_error
+    Error (Pg_error.Migration_error
       "no migrations have been applied; nothing to roll back")
   | Some (version, name) ->
     let down_file = Printf.sprintf "%04d_%s.down.sql" version name in
     let down_path = Filename.concat dir down_file in
     let* down_exists = is_file ~fs down_path in
     if not down_exists then
-      Error (Storage_error.Migration_error (Printf.sprintf
+      Error (Pg_error.Migration_error (Printf.sprintf
         "no down-migration file found for version %04d (%s).\n\
          Create %s with the reverse SQL and retry."
         version name down_path))
     else
       let* sql = read_file ~fs down_path in
-      Db.transaction pool (fun pool ->
+      Pg_db.transaction pool (fun pool ->
         let* () = exec_statements pool (split_sql_statements sql) in
-        Db.exec pool (delete_version_q table) version
+        Pg_db.exec pool (delete_version_q table) version
         |> Result.map_error (fun e ->
-          Storage_error.Migration_error (
-            "update tracking table: " ^ Storage_error.to_string e))
+          Pg_error.Migration_error (
+            "update tracking table: " ^ Pg_error.to_string e))
       )
       |> Result.map_error (fun e ->
-        Storage_error.Migration_error (
+        Pg_error.Migration_error (
           Printf.sprintf "rollback %04d (%s) failed: %s"
-            version name (Storage_error.to_string e)))
+            version name (Pg_error.to_string e)))

@@ -2,7 +2,7 @@
  (name pg_eio)
  (public_name pg-eio)
  (wrapped false)
- (modules Storage_error Db Migration Table)
+ (modules Pg_error Pg_db Migration Pg_table)
  (libraries
    eio
    uri

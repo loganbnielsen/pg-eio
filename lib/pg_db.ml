@@ -4,12 +4,12 @@ module Request = Caqti_request
 (* Polymorphic record field hides the caqti pool's type variable. *)
 type pool = {
   use_conn :
-    'b. (Caqti_eio.connection -> ('b, Storage_error.t) result) ->
-        ('b, Storage_error.t) result;
+    'b. (Caqti_eio.connection -> ('b, Pg_error.t) result) ->
+        ('b, Pg_error.t) result;
 }
 
 (* Internal — carries application errors out of Pool.use callbacks. *)
-exception App_error of Storage_error.t
+exception App_error of Pg_error.t
 
 let ( let* ) = Result.bind
 
@@ -18,16 +18,16 @@ let translate_error e =
   | (`Request_failed _ | `Response_failed _) as e ->
     (match Caqti_error.cause e with
      | #Caqti_error.integrity_constraint_violation ->
-       Storage_error.Constraint_error (Caqti_error.show e)
-     | _ -> Storage_error.Query_error (Caqti_error.show e))
-  | e -> Storage_error.Query_error (Caqti_error.show e)
+       Pg_error.Constraint_error (Caqti_error.show e)
+     | _ -> Pg_error.Query_error (Caqti_error.show e))
+  | e -> Pg_error.Query_error (Caqti_error.show e)
 
 let map_err r = Result.map_error translate_error r
 
 let create_pool ~url ?pool_size ~sw ~stdenv () =
   let* () =
     match pool_size with
-    | Some n when n <= 0 -> Error (Storage_error.Connection_error "pool_size must be positive")
+    | Some n when n <= 0 -> Error (Pg_error.Connection_error "pool_size must be positive")
     | _ -> Ok ()
   in
   let uri = Uri.of_string url in
@@ -36,10 +36,10 @@ let create_pool ~url ?pool_size ~sw ~stdenv () =
     | Some n -> Caqti_pool_config.create ~max_size:n ()
   in
   let* p = Caqti_eio_unix.connect_pool ~sw ~stdenv ~pool_config uri
-    |> Result.map_error (fun e -> Storage_error.Connection_error (Caqti_error.show e)) in
+    |> Result.map_error (fun e -> Pg_error.Connection_error (Caqti_error.show e)) in
   let use_conn (type b)
-      (f : Caqti_eio.connection -> (b, Storage_error.t) result)
-      : (b, Storage_error.t) result =
+      (f : Caqti_eio.connection -> (b, Pg_error.t) result)
+      : (b, Pg_error.t) result =
     try
       match Caqti_eio.Pool.use (fun conn ->
         match f conn with
@@ -47,7 +47,7 @@ let create_pool ~url ?pool_size ~sw ~stdenv () =
         | Error e -> raise (App_error e)
       ) p with
       | Ok v    -> Ok v
-      | Error e -> Error (Storage_error.Connection_error (Caqti_error.show e))
+      | Error e -> Error (Pg_error.Connection_error (Caqti_error.show e))
     with App_error e -> Error e
   in
   Ok { use_conn }
@@ -71,9 +71,9 @@ let transaction pool f =
       match C.rollback () with
       | Ok () -> Error orig_err
       | Error rb ->
-        Error (Storage_error.Query_error
+        Error (Pg_error.Query_error
           (Printf.sprintf "%s (rollback also failed: %s)"
-             (Storage_error.to_string orig_err) (Caqti_error.show rb)))
+             (Pg_error.to_string orig_err) (Caqti_error.show rb)))
     in
     let* () = map_err (C.start ()) in
     let tx_pool = { use_conn = fun g -> g conn } in
@@ -82,7 +82,7 @@ let transaction pool f =
       | (Out_of_memory | Stack_overflow | Sys.Break | Eio.Cancel.Cancelled _) as exn ->
         raise exn
       | exn ->
-        Error (Storage_error.Query_error
+        Error (Pg_error.Query_error
           (Printf.sprintf "transaction callback raised: %s" (Printexc.to_string exn)))
     in
     match result with

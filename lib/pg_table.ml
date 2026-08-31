@@ -17,7 +17,7 @@ end
 module Identifier : sig
   type t = private string
 
-  val of_string : ?kind:string -> string -> (t, Storage_error.t) result
+  val of_string : ?kind:string -> string -> (t, Pg_error.t) result
   val of_string_exn : ?kind:string -> string -> t
   val to_string : t -> string
 end = struct
@@ -32,7 +32,7 @@ end = struct
     | _ -> false
 
   let error kind msg =
-    Storage_error.Query_error (Printf.sprintf "%s identifier %s" kind msg)
+    Pg_error.Query_error (Printf.sprintf "%s identifier %s" kind msg)
 
   let of_string ?(kind = "SQL") name =
     if String.length name = 0 then
@@ -57,8 +57,8 @@ end = struct
   let of_string_exn ?kind name =
     match of_string ?kind name with
     | Ok identifier -> identifier
-    | Error (Storage_error.Query_error msg) -> invalid_arg msg
-    | Error err -> invalid_arg (Storage_error.to_string err)
+    | Error (Pg_error.Query_error msg) -> invalid_arg msg
+    | Error err -> invalid_arg (Pg_error.to_string err)
 
   let to_string identifier = identifier
 end
@@ -67,7 +67,7 @@ module Limit : sig
   type t = private int
 
   val max_value : int
-  val of_int : int -> (t, Storage_error.t) result
+  val of_int : int -> (t, Pg_error.t) result
   val to_int : t -> int
 end = struct
   type t = int
@@ -76,10 +76,10 @@ end = struct
 
   let of_int n =
     if n <= 0 then
-      Error (Storage_error.Query_error "table list limit must be positive")
+      Error (Pg_error.Query_error "table list limit must be positive")
     else if n > max_value then
       Error
-        (Storage_error.Query_error
+        (Pg_error.Query_error
            (Printf.sprintf "table list limit must be <= %d" max_value))
     else
       Ok n
@@ -90,14 +90,14 @@ end
 module Offset : sig
   type t = private int
 
-  val of_int : int -> (t, Storage_error.t) result
+  val of_int : int -> (t, Pg_error.t) result
   val to_int : t -> int
 end = struct
   type t = int
 
   let of_int n =
     if n < 0 then
-      Error (Storage_error.Query_error "table list offset must be non-negative")
+      Error (Pg_error.Query_error "table list offset must be non-negative")
     else
       Ok n
 
@@ -145,13 +145,13 @@ module Make (S : SCHEMA) = struct
     Caqti_request.Infix.(Caqti_type.(t2 int int) ->* S.row_type)
       (Printf.sprintf "SELECT %s FROM %s LIMIT ? OFFSET ?" column_list table)
 
-  let find   pool id  = Db.find    pool find_q   id
-  let insert pool row = Db.exec    pool insert_q  row
-  let delete pool id  = Db.exec    pool delete_q  id
+  let find   pool id  = Pg_db.find    pool find_q   id
+  let insert pool row = Pg_db.exec    pool insert_q  row
+  let delete pool id  = Pg_db.exec    pool delete_q  id
 
   let default_limit = Result.get_ok (Limit.of_int 100)
   let default_offset = Result.get_ok (Offset.of_int 0)
 
   let list pool ?(limit = default_limit) ?(offset = default_offset) () =
-    Db.collect pool list_q (Limit.to_int limit, Offset.to_int offset)
+    Pg_db.collect pool list_q (Limit.to_int limit, Offset.to_int offset)
 end
