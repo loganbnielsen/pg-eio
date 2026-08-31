@@ -52,6 +52,11 @@ let create_pool ~url ?pool_size ~sw ~stdenv () =
   in
   Ok { use_conn }
 
+let of_env ~sw ~stdenv ?pool_size () =
+  match Sys.getenv_opt "POSTGRES_URL" with
+  | None | Some "" -> Error (Pg_error.Connection_error "POSTGRES_URL is not set")
+  | Some url -> create_pool ~url ?pool_size ~sw ~stdenv ()
+
 let exec pool req params =
   pool.use_conn (fun (module C : Caqti_eio.CONNECTION) ->
     map_err (C.exec req params))

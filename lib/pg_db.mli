@@ -16,6 +16,15 @@ val create_pool
   -> unit
   -> (pool, Pg_error.t) result
 
+(** [of_env ~sw ~stdenv ()] reads [POSTGRES_URL] and calls {!create_pool}.
+    [Error (Connection_error _)] if the variable is unset or empty. *)
+val of_env
+  :  sw:Eio.Switch.t
+  -> stdenv:Caqti_eio.stdenv
+  -> ?pool_size:int
+  -> unit
+  -> (pool, Pg_error.t) result
+
 (** Execute a statement that returns no rows. *)
 val exec
   :  pool

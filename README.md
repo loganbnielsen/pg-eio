@@ -59,6 +59,14 @@ val create_pool
   -> unit
   -> (pool, Pg_error.t) result
 
+(* Reads POSTGRES_URL and calls create_pool. *)
+val of_env
+  :  sw:Eio.Switch.t
+  -> stdenv:Caqti_eio.stdenv
+  -> ?pool_size:int
+  -> unit
+  -> (pool, Pg_error.t) result
+
 val exec        : pool -> ('p, unit, [< `Zero]) Caqti_request.t -> 'p -> (unit, Pg_error.t) result
 val find        : pool -> ('p, 'r, [< `Zero | `One]) Caqti_request.t -> 'p -> ('r option, Pg_error.t) result
 val collect     : pool -> ('p, 'r, [< `Zero | `One | `Many]) Caqti_request.t -> 'p -> ('r list, Pg_error.t) result
