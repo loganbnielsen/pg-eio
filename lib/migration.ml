@@ -237,7 +237,7 @@ let delete_version_q table =
 
 (* ── Public API ──────────────────────────────────────────────────────────── *)
 
-let default_table = "sun_schema_migrations"
+let default_table = "sol_schema_migrations"
 
 (* ~table is interpolated unquoted into SQL; reuse Pg_table's identifier validator to prevent injection. *)
 let validate_table table =
