@@ -296,11 +296,11 @@ let status ?(table = default_table) ~fs pool ~dir =
     Ok ({ version; name; applied_at } :: rows)
   ) migrations (Ok [])
 
-(** Roll back the last applied migration using a companion .down.sql file.
-    Expects e.g. db/migrations/0001_notifications.down.sql alongside the up file. *)
 let migrations ~fs ~dir =
   Result.map (List.map (fun (v, name, _) -> (v, name))) (read_migrations ~fs dir)
 
+(** Roll back the last applied migration using a companion .down.sql file.
+    Expects e.g. db/migrations/0001_notifications.down.sql alongside the up file. *)
 let rollback ?(table = default_table) ~fs pool ~dir =
   let wrap msg = Result.map_error (fun e ->
     Pg_error.Migration_error (msg ^ Pg_error.to_string e))
