@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `Migration.apply`/`status` now refuse a migrations directory in which two files
+  share a version, naming both files, before connecting. The tracking table keys on
+  version, so the second file used to be skipped forever once the first was applied.
+  New `Migration.migrations ~fs ~dir` lists `(version, name)` in order without a
+  database (Sol BUG-041 / FND-0032).
 - `Db.create_pool` now rejects non-positive `pool_size` values with
   `Connection_error` before constructing the Caqti pool.
 - `Db.transaction` now converts non-fatal callback exceptions into returned

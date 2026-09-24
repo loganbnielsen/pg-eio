@@ -63,6 +63,44 @@ let test_migration_parse_filename () =
     Alcotest.(check (option (pair int string))) filename expected got
   ) cases
 
+let with_migration_dir files f =
+  let dir = Filename.temp_file "pg-eio-migrations-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  List.iter (fun name ->
+    let oc = open_out (Filename.concat dir name) in close_out oc) files;
+  Fun.protect
+    ~finally:(fun () ->
+      Array.iter (fun n -> Sys.remove (Filename.concat dir n)) (Sys.readdir dir);
+      Unix.rmdir dir)
+    (fun () -> Eio_main.run (fun env -> f ~fs:(Eio.Stdenv.fs env) ~dir))
+
+let test_migrations_rejects_shared_version () =
+  with_migration_dir
+    [ "0001_init.sql"; "0004_add_refunds.sql"; "0004_add_invoices.sql" ]
+    (fun ~fs ~dir ->
+      match Migration.migrations ~fs ~dir with
+      | Ok _ -> Alcotest.fail "expected an error for two migrations sharing version 4"
+      | Error (Pg_error.Migration_error msg) ->
+        let has needle =
+          let n = String.length needle and m = String.length msg in
+          let rec go i = i + n <= m && (String.sub msg i n = needle || go (i + 1)) in
+          go 0
+        in
+        Alcotest.(check bool) "names 0004_add_invoices" true (has "0004_add_invoices.sql");
+        Alcotest.(check bool) "names 0004_add_refunds" true (has "0004_add_refunds.sql")
+      | Error e -> Alcotest.failf "unexpected error: %s" (Pg_error.to_string e))
+
+let test_migrations_orders_and_skips_down_files () =
+  with_migration_dir
+    [ "0002_b.sql"; "0001_a.sql"; "0001_a.down.sql"; "notes.md" ]
+    (fun ~fs ~dir ->
+      match Migration.migrations ~fs ~dir with
+      | Error e -> Alcotest.failf "unexpected error: %s" (Pg_error.to_string e)
+      | Ok got ->
+        Alcotest.(check (list (pair int string))) "ordered, no down files"
+          [ (1, "a"); (2, "b") ] got)
+
 let test_table_limit_rejects_non_positive () =
   let cases = [0; -1] in
   List.iter (fun limit ->
@@ -674,6 +712,9 @@ let () =
     ];
     "migration_parse", [
       test_case "parse_filename" `Quick test_migration_parse_filename;
+      test_case "rejects_shared_version" `Quick test_migrations_rejects_shared_version;
+      test_case "orders_and_skips_down_files" `Quick
+        test_migrations_orders_and_skips_down_files;
     ];
     "table_pagination", [
       test_case "rejects_non_positive_limit" `Quick
