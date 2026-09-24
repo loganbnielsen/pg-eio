@@ -33,7 +33,21 @@ let read_migrations ~fs dir =
       | Some (v, name) -> Some (v, name, Filename.concat dir f))
     in
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare a b) parsed in
-    Ok sorted
+    (* A migration's identity in the tracking table is its version alone, so two
+       files with one version would be applied once and the other skipped forever
+       once that version is recorded. Refuse the directory instead, naming both. *)
+    let rec shared = function
+      | (v, _, a) :: ((v', _, b) :: _) when v = v' -> Some (v, a, b)
+      | _ :: rest -> shared rest
+      | [] -> None
+    in
+    (match shared sorted with
+     | None -> Ok sorted
+     | Some (v, a, b) ->
+       Error (Pg_error.Migration_error (Printf.sprintf
+         "migrations %s and %s share version %d; each migration needs its own \
+          version, or one is applied and the other silently skipped -- renumber one"
+         (Filename.basename a) (Filename.basename b) v)))
 
 let read_file ~fs file =
   match Eio.Path.load (fs_path fs file) with
@@ -251,8 +265,8 @@ let apply ?(table = default_table) ~fs pool ~dir =
     Pg_error.Migration_error (msg ^ Pg_error.to_string e))
   in
   let* table = validate_table table in
-  let* () = ensure_table table pool |> wrap "create migrations table: " in
   let* migrations = read_migrations ~fs dir in
+  let* () = ensure_table table pool |> wrap "create migrations table: " in
   let* applied = applied_versions table pool |> wrap "query applied migrations: " in
   let pending = List.filter (fun (v, _, _) -> not (List.mem v applied)) migrations in
   List.fold_left (fun acc (version, name, path) ->
@@ -273,14 +287,17 @@ let status ?(table = default_table) ~fs pool ~dir =
     Pg_error.Migration_error (msg ^ Pg_error.to_string e))
   in
   let* table = validate_table table in
-  let* () = ensure_table table pool |> wrap "create migrations table: " in
   let* migrations = read_migrations ~fs dir in
+  let* () = ensure_table table pool |> wrap "create migrations table: " in
   let row_q = applied_at_q table in
   List.fold_right (fun (version, name, _) acc ->
     let* rows = acc in
     let* applied_at = Pg_db.find pool row_q version in
     Ok ({ version; name; applied_at } :: rows)
   ) migrations (Ok [])
+
+let migrations ~fs ~dir =
+  Result.map (List.map (fun (v, name, _) -> (v, name))) (read_migrations ~fs dir)
 
 (** Roll back the last applied migration using a companion .down.sql file.
     Expects e.g. db/migrations/0001_notifications.down.sql alongside the up file. *)
