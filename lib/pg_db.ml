@@ -11,7 +11,7 @@ type pool = {
 (* Internal — carries application errors out of Pool.use callbacks. *)
 exception App_error of Pg_error.t
 
-let ( let* ) = Result.bind
+open Result.Syntax
 
 let translate_error e =
   match e with
