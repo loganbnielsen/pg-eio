@@ -17,8 +17,13 @@ end
 module Identifier : sig
   type t = private string
 
-  val of_string : ?kind:string -> string -> (t, Pg_error.t) result
-  val of_string_exn : ?kind:string -> string -> t
+  type kind =
+    [ `Table
+    | `Column
+    ]
+
+  val of_string : kind:kind -> string -> (t, Pg_error.t) result
+  val of_string_exn : kind:kind -> string -> t
   val to_string : t -> string
 end = struct
   type t = string
@@ -31,10 +36,21 @@ end = struct
     | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' -> true
     | _ -> false
 
-  let error kind msg =
-    Pg_error.Query_error (Printf.sprintf "%s identifier %s" kind msg)
+  type kind =
+    [ `Table
+    | `Column
+    ]
 
-  let of_string ?(kind = "SQL") name =
+  let kind_to_string = function
+    | `Table -> "table"
+    | `Column -> "column"
+  ;;
+
+  let error kind msg =
+    Pg_error.Query_error
+      (Printf.sprintf "%s identifier %s" (kind_to_string kind) msg)
+
+  let of_string ~kind name =
     if String.length name = 0 then
       Error (error kind "must not be empty")
     else if not (is_initial_char name.[0]) then
@@ -54,8 +70,8 @@ end = struct
       in
       loop 1
 
-  let of_string_exn ?kind name =
-    match of_string ?kind name with
+  let of_string_exn ~kind name =
+    match of_string ~kind name with
     | Ok identifier -> identifier
     | Error (Pg_error.Query_error msg) -> invalid_arg msg
     | Error err -> invalid_arg (Pg_error.to_string err)
@@ -111,19 +127,19 @@ module Make (S : SCHEMA) = struct
 
   let table =
     S.table
-    |> Identifier.of_string_exn ~kind:"table"
+    |> Identifier.of_string_exn ~kind:`Table
     |> Identifier.to_string
 
   let id_column =
     S.id_column
-    |> Identifier.of_string_exn ~kind:"column"
+    |> Identifier.of_string_exn ~kind:`Column
     |> Identifier.to_string
 
   let columns =
     S.columns
     |> List.map (fun column ->
       column
-      |> Identifier.of_string_exn ~kind:"column"
+      |> Identifier.of_string_exn ~kind:`Column
       |> Identifier.to_string)
 
   let column_list = String.concat ", " columns

@@ -93,7 +93,12 @@ let test_table_offset_rejects_negative () =
 let assert_invalid_identifier kind name expected =
   match Pg_table.Identifier.of_string ~kind name with
   | Ok _ ->
-    Alcotest.failf "expected invalid %s identifier: %S" kind name
+    Alcotest.failf
+      "expected invalid %s identifier: %S"
+      (match kind with
+       | `Table -> "table"
+       | `Column -> "column")
+      name
   | Error (Pg_error.Query_error msg) ->
     Alcotest.(check string) "identifier error" expected msg
   | Error err ->
@@ -131,8 +136,16 @@ let test_table_identifier_rejects_invalid_names () =
     "table identifier \"public.users\" is unsafe; expected [A-Za-z_][A-Za-z0-9_]*";
   ] in
   List.iter (fun (name, expected) ->
-    assert_invalid_identifier "table" name expected
+    assert_invalid_identifier `Table name expected
   ) cases
+
+let test_column_identifier_names_its_kind () =
+  assert_invalid_identifier `Column "" "column identifier must not be empty";
+  assert_invalid_identifier
+    `Column
+    "1col"
+    "column identifier \"1col\" is unsafe; expected [A-Za-z_][A-Za-z0-9_]*"
+;;
 
 let test_table_make_rejects_invalid_table_name () =
   assert_invalid_schema "invalid table name"
@@ -684,6 +697,8 @@ let () =
     "table_identifiers", [
       test_case "constructor_rejects_invalid_names" `Quick
         test_table_identifier_rejects_invalid_names;
+      test_case "column_identifier_names_its_kind" `Quick
+        test_column_identifier_names_its_kind;
       test_case "make_rejects_invalid_table_name" `Quick
         test_table_make_rejects_invalid_table_name;
       test_case "make_rejects_invalid_column_names" `Quick

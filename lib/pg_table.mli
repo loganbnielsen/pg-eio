@@ -32,7 +32,16 @@ end
 module Identifier : sig
   type t = private string
 
-  val of_string : ?kind:string -> string -> (t, Pg_error.t) result
+  type kind =
+    [ `Table
+    | `Column
+    ]
+  (** Which identifier is being validated. It is not a free string: the value
+      only words the error message, and a typo there is exactly the kind of
+      mistake the validation exists to prevent. There is no default — a caller
+      that validates an identifier knows what it is validating. *)
+
+  val of_string : kind:kind -> string -> (t, Pg_error.t) result
   val to_string : t -> string
 end
 
