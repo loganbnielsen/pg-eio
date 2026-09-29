@@ -255,7 +255,7 @@ let default_table = "sol_schema_migrations"
 
 (* ~table is interpolated unquoted into SQL; reuse Pg_table's identifier validator to prevent injection. *)
 let validate_table table =
-  match Pg_table.Identifier.of_string ~kind:"migrations table" table with
+  match Pg_table.Identifier.of_string ~kind:`Table table with
   | Ok id   -> Ok (Pg_table.Identifier.to_string id)
   | Error _ -> Error (Pg_error.Migration_error
       (Printf.sprintf "invalid migrations table name %S; expected [A-Za-z_][A-Za-z0-9_]*" table))
