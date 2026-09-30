@@ -46,7 +46,9 @@ let read_migrations ~fs dir =
     in
     let open Result.Syntax in
     let* parsed = parsed in
-    let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare a b) parsed in
+    let sorted = List.sort (fun (a, _, fa) (b, _, fb) ->
+      let by_version = compare a b in
+      if by_version = 0 then String.compare fa fb else by_version) parsed in
     (* A migration's identity in the tracking table is its version alone, so two
        files with one version would be applied once and the other skipped forever
        once that version is recorded. Refuse the directory instead, naming both. *)
@@ -245,6 +247,12 @@ let applied_versions table pool =
   in
   Pg_db.collect pool q ()
 
+let table_exists pool table =
+  let q = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.bool) ~oneshot:true
+    "SELECT to_regclass(?) IS NOT NULL"
+  in
+  Pg_db.find pool q table |> Result.map (Option.value ~default:false)
+
 let record_migration table pool version name =
   let q = Caqti_request.Infix.(Caqti_type.(t2 int string) ->. Caqti_type.unit) ~oneshot:true
     (Printf.sprintf "INSERT INTO %s (version, name) VALUES (?, ?)" table)
@@ -280,13 +288,18 @@ let pending ?(table = default_table) ~fs pool ~dir =
   in
   let* table = validate_table table in
   let* migrations = read_migrations ~fs dir in
-  let* () = ensure_table table pool |> wrap "create migrations table: " in
-  let* applied = applied_versions table pool |> wrap "query applied migrations: " in
+  let* exists = table_exists pool table |> wrap "check migrations table: " in
+  let* applied =
+    if exists then applied_versions table pool |> wrap "query applied migrations: "
+    else Ok []
+  in
   Ok (List.filter (fun (v, _, _) -> not (List.mem v applied)) migrations)
 
 let apply ?(table = default_table) ~fs pool ~dir =
   let* table = validate_table table in
   let* pending = pending ~table ~fs pool ~dir in
+  let* () = ensure_table table pool |> Result.map_error (fun e ->
+    Pg_error.Migration_error ("create migrations table: " ^ Pg_error.to_string e)) in
   List.fold_left (fun acc (version, name, path) ->
     let* () = acc in
     let* sql = read_file ~fs path in

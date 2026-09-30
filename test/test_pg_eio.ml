@@ -447,6 +447,13 @@ let test_migration_apply () =
     write_file "0002_add_index.sql"
       "CREATE INDEX IF NOT EXISTS sun_mig_items_id ON sun_mig_items (id)";
     let mtable = Printf.sprintf "sun_test_mig_%d" (Random.int 1000000) in
+    let pending_before = or_fail (Migration.pending ~fs:env#fs pool ~dir ~table:mtable) in
+    Alcotest.(check (list int)) "all pending before apply" [1; 2]
+      (List.map (fun (version, _, _) -> version) pending_before);
+    let exists_q = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.bool) ~oneshot:true
+      "SELECT to_regclass(?) IS NOT NULL" in
+    Alcotest.(check (option bool)) "pending is read-only" (Some false)
+      (or_fail (Pg_db.find pool exists_q mtable));
     or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
     write_file "0003_add_label_index.sql"
       "CREATE INDEX IF NOT EXISTS sun_mig_items_label ON sun_mig_items (label)";
