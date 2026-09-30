@@ -16,9 +16,10 @@ let parse_filename f =
     match String.split_on_char '_' base with
     | [] | [_] -> None
     | version_str :: rest ->
-      (match int_of_string_opt version_str with
-       | None   -> None
-       | Some v -> Some (v, String.concat "_" rest))
+      if version_str = "" || String.concat "_" rest = ""
+         || not (String.for_all (function '0' .. '9' -> true | _ -> false) version_str)
+      then None
+      else Option.map (fun v -> v, String.concat "_" rest) (int_of_string_opt version_str)
 
 let fs_path fs path = Eio.Path.(fs / path)
 
@@ -27,11 +28,24 @@ let read_migrations ~fs dir =
   | exception (Eio.Io _ as exn) ->
     Error (Pg_error.Migration_error ("cannot read migrations dir: " ^ Printexc.to_string exn))
   | files ->
-    let parsed = files |> List.filter_map (fun f ->
-      match parse_filename f with
-      | None           -> None
-      | Some (v, name) -> Some (v, name, Filename.concat dir f))
+    let parsed =
+      List.fold_left (fun acc f ->
+        let open Result.Syntax in
+        let* migrations = acc in
+        if not (Filename.check_suffix f ".sql") then Ok migrations
+        else if Filename.check_suffix f ".down.sql" then
+          let up = Filename.chop_suffix f ".down.sql" ^ ".sql" in
+          (match parse_filename up with
+           | Some _ -> Ok migrations
+           | None -> Error (Pg_error.Migration_error ("invalid migration file " ^ f)))
+        else
+          match parse_filename f with
+          | Some (v, name) -> Ok ((v, name, Filename.concat dir f) :: migrations)
+          | None -> Error (Pg_error.Migration_error ("invalid migration file " ^ f)))
+        (Ok []) files
     in
+    let open Result.Syntax in
+    let* parsed = parsed in
     let sorted = List.sort (fun (a, _, _) (b, _, _) -> compare a b) parsed in
     (* A migration's identity in the tracking table is its version alone, so two
        files with one version would be applied once and the other skipped forever
@@ -260,7 +274,7 @@ let validate_table table =
   | Error _ -> Error (Pg_error.Migration_error
       (Printf.sprintf "invalid migrations table name %S; expected [A-Za-z_][A-Za-z0-9_]*" table))
 
-let apply ?(table = default_table) ~fs pool ~dir =
+let pending ?(table = default_table) ~fs pool ~dir =
   let wrap msg = Result.map_error (fun e ->
     Pg_error.Migration_error (msg ^ Pg_error.to_string e))
   in
@@ -268,7 +282,11 @@ let apply ?(table = default_table) ~fs pool ~dir =
   let* migrations = read_migrations ~fs dir in
   let* () = ensure_table table pool |> wrap "create migrations table: " in
   let* applied = applied_versions table pool |> wrap "query applied migrations: " in
-  let pending = List.filter (fun (v, _, _) -> not (List.mem v applied)) migrations in
+  Ok (List.filter (fun (v, _, _) -> not (List.mem v applied)) migrations)
+
+let apply ?(table = default_table) ~fs pool ~dir =
+  let* table = validate_table table in
+  let* pending = pending ~table ~fs pool ~dir in
   List.fold_left (fun acc (version, name, path) ->
     let* () = acc in
     let* sql = read_file ~fs path in
@@ -297,7 +315,7 @@ let status ?(table = default_table) ~fs pool ~dir =
   ) migrations (Ok [])
 
 let migrations ~fs ~dir =
-  Result.map (List.map (fun (v, name, _) -> (v, name))) (read_migrations ~fs dir)
+  read_migrations ~fs dir
 
 (** Roll back the last applied migration using a companion .down.sql file.
     Expects e.g. db/migrations/0001_notifications.down.sql alongside the up file. *)
@@ -306,6 +324,7 @@ let rollback ?(table = default_table) ~fs pool ~dir =
     Pg_error.Migration_error (msg ^ Pg_error.to_string e))
   in
   let* table = validate_table table in
+  let* migrations = read_migrations ~fs dir in
   let* () = ensure_table table pool |> wrap "create migrations table: " in
   let* last = Pg_db.find pool (last_applied_q table) () in
   match last with
@@ -313,8 +332,13 @@ let rollback ?(table = default_table) ~fs pool ~dir =
     Error (Pg_error.Migration_error
       "no migrations have been applied; nothing to roll back")
   | Some (version, name) ->
-    let down_file = Printf.sprintf "%04d_%s.down.sql" version name in
-    let down_path = Filename.concat dir down_file in
+    let* up_path =
+      match List.find_opt (fun (v, n, _) -> v = version && n = name) migrations with
+      | Some (_, _, path) -> Ok path
+      | None -> Error (Pg_error.Migration_error
+          (Printf.sprintf "applied migration %d (%s) is missing from %s" version name dir))
+    in
+    let down_path = Filename.chop_suffix up_path ".sql" ^ ".down.sql" in
     let* down_exists = is_file ~fs down_path in
     if not down_exists then
       Error (Pg_error.Migration_error (Printf.sprintf

@@ -48,18 +48,7 @@ let test_migration_parse_filename () =
     "abc_init.sql",                None;
   ] in
   List.iter (fun (filename, expected) ->
-    (* Access internal parse via migration file directly *)
-    let got =
-      if not (Filename.check_suffix filename ".sql") then None
-      else
-        let base = Filename.chop_suffix filename ".sql" in
-        match String.split_on_char '_' base with
-        | [] | [_] -> None
-        | v :: rest ->
-          (match int_of_string_opt v with
-           | None   -> None
-           | Some n -> Some (n, String.concat "_" rest))
-    in
+    let got = Migration.parse_filename filename in
     Alcotest.(check (option (pair int string))) filename expected got
   ) cases
 
@@ -99,7 +88,15 @@ let test_migrations_orders_and_skips_down_files () =
       | Error e -> Alcotest.failf "unexpected error: %s" (Pg_error.to_string e)
       | Ok got ->
         Alcotest.(check (list (pair int string))) "ordered, no down files"
-          [ (1, "a"); (2, "b") ] got)
+          [ (1, "a"); (2, "b") ]
+          (List.map (fun (version, name, _) -> version, name) got))
+
+let test_migrations_rejects_invalid_sql () =
+  with_migration_dir [ "0001_valid.sql"; "not_a_migration.sql" ] (fun ~fs ~dir ->
+    match Migration.migrations ~fs ~dir with
+    | Error (Pg_error.Migration_error _) -> ()
+    | Error e -> Alcotest.failf "unexpected error: %s" (Pg_error.to_string e)
+    | Ok _ -> Alcotest.fail "invalid SQL migration was silently skipped")
 
 let test_table_limit_rejects_non_positive () =
   let cases = [0; -1] in
@@ -615,7 +612,7 @@ INSERT INTO %s (note) VALUES ('now returning to base');|} tbl tbl);
     in
     or_fail (Pg_db.exec pool cleanup_q ())
 
-let test_migration_rollback_down_sql () =
+let test_migration_rollback_down_sql prefix () =
   match postgres_url () with
   | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
   | Some url ->
@@ -627,12 +624,12 @@ let test_migration_rollback_down_sql () =
     with_migration_dir @@ fun dir write ->
     let tbl = Printf.sprintf "sun_mig_rb_%d" (Random.int 1000000) in
     let mtable = Printf.sprintf "sun_test_mig_rb_%d" (Random.int 1000000) in
-    write (Printf.sprintf "0001_create_%s.sql" tbl)
+    write (Printf.sprintf "%s_create_%s.sql" prefix tbl)
       (Printf.sprintf
         {|CREATE TABLE IF NOT EXISTS %s (id INT, note TEXT);
 -- note: 'semi; colon' inside comment
 INSERT INTO %s (id, note) VALUES (1, 'value; with; semis');|} tbl tbl);
-    write (Printf.sprintf "0001_create_%s.down.sql" tbl)
+    write (Printf.sprintf "%s_create_%s.down.sql" prefix tbl)
       (Printf.sprintf "DROP TABLE IF EXISTS %s" tbl);
     or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
     or_fail (Migration.rollback ~fs:env#fs pool ~dir ~table:mtable);
@@ -726,6 +723,7 @@ let () =
     "migration_parse", [
       test_case "parse_filename" `Quick test_migration_parse_filename;
       test_case "rejects_shared_version" `Quick test_migrations_rejects_shared_version;
+      test_case "rejects_invalid_sql" `Quick test_migrations_rejects_invalid_sql;
       test_case "orders_and_skips_down_files" `Quick
         test_migrations_orders_and_skips_down_files;
     ];
@@ -764,7 +762,8 @@ let () =
       test_case "insert_returning"        `Quick test_migration_insert_returning;
       test_case "insert_with_returning_in_string_literal" `Quick
         test_migration_insert_with_returning_in_string_literal;
-      test_case "rollback_down_sql"       `Quick test_migration_rollback_down_sql;
+      test_case "rollback_down_sql_001" `Quick (test_migration_rollback_down_sql "001");
+      test_case "rollback_down_sql_0001" `Quick (test_migration_rollback_down_sql "0001");
       test_case "rejects_unsafe_table_name" `Quick test_migration_rejects_unsafe_table_name;
     ];
   ]
