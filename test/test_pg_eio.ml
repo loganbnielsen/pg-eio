@@ -448,10 +448,14 @@ let test_migration_apply () =
       "CREATE INDEX IF NOT EXISTS sun_mig_items_id ON sun_mig_items (id)";
     let mtable = Printf.sprintf "sun_test_mig_%d" (Random.int 1000000) in
     or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
-    (* idempotent — applying again is a no-op *)
+    write_file "0003_add_label_index.sql"
+      "CREATE INDEX IF NOT EXISTS sun_mig_items_label ON sun_mig_items (label)";
+    let pending = or_fail (Migration.pending ~fs:env#fs pool ~dir ~table:mtable) in
+    Alcotest.(check (list int)) "only unapplied migration is pending" [3]
+      (List.map (fun (version, _, _) -> version) pending);
     or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
     let s = or_fail (Migration.status ~fs:env#fs pool ~dir ~table:mtable) in
-    Alcotest.(check int) "two migrations recorded" 2 (List.length s);
+    Alcotest.(check int) "three migrations recorded" 3 (List.length s);
     List.iter (fun ms ->
       Alcotest.(check bool) (Printf.sprintf "v%d applied" ms.Migration.version)
         true (ms.Migration.applied_at <> None)
