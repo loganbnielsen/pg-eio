@@ -130,15 +130,15 @@ val rollback
 val migrations
   :  fs:_ Eio.Path.t
   -> dir:string
-  -> ((int * string) list, Pg_error.t) result
+  -> ((int * string * string) list, Pg_error.t) result
 ```
 
-Migration files follow the naming convention `NNNN_description.sql` (e.g.
-`0001_init.sql`). Down-migration files follow `NNNN_description.down.sql` (required
-for `rollback`). **Each version must be unique:** the tracking table records versions
-only, so `apply` and `status` refuse a directory in which two files share one, naming
-both, before they connect (the second would otherwise be skipped forever once the first
-is applied). `migrations ~fs ~dir` lists `(version, name)` in order without a database. Applied versions are tracked in a table created automatically on
+Migration files follow the naming convention `NNN_description.sql` (e.g.
+`001_init.sql` or `0001_init.sql`). Down-migration files use the same original
+prefix and end in `.down.sql`. Every `.sql` file must have a valid name and each
+version must be unique. `migrations ~fs ~dir` lists `(version, name, original_path)`
+in order without a database. `pending ~fs pool ~dir` returns only unapplied
+migrations with the same file identity. Applied versions are tracked in a table created automatically on
 first `apply` (default name `sun_schema_migrations` — override with `~table` to keep
 multiple logical databases/tenants sharing one Postgres instance from colliding on
 version numbers). `~table` is validated as an unquoted SQL identifier
