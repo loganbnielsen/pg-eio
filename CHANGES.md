@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Breaking:** `Db.` handles are now capability-typed. `type 'a handle` carries a
+  phantom: `Db.pool = [`Pool] handle` is the pool, and `Db.transaction`'s callback
+  receives a `Db.tx = [`Tx] handle`. `exec`/`find`/`collect` are polymorphic in the
+  capability, so they take either without duplication, and a function that requires a
+  `tx` — a job enqueue, an outbox publish — is now uncallable outside a transaction.
+  The representation is unchanged, so the distinction costs nothing at runtime.
+
+  This also makes nesting unrepresentable: `Db.transaction tx f` used to type-check
+  because a `tx` *was* a `pool`, and the inner `COMMIT` then ended the caller's
+  transaction early — a later `Error` in the outer callback rolled back nothing.
+  Verified against a live database before the change (outer `Error` after a nested
+  transaction left both rows committed).
+
+  Callers that only pass the pool around need no change; a callback parameter named
+  `pool` still compiles, and any code that fed a transaction callback's handle to
+  `enqueue`-style functions now needs those functions to take `Db.tx`.
 - `Migration.apply`/`status` now refuse a migrations directory in which two files
   share a version, naming both files, before connecting. The tracking table keys on
   version, so the second file used to be skipped forever once the first was applied.
