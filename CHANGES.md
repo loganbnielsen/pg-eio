@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `Pg_table.Make`'s `find`/`insert`/`delete`/`all` take `'a Db.handle` rather than
+  `Db.pool`, matching `Db.exec`/`find`/`collect`. A generated table accessor now works
+  on the pool and on a transaction handle, so an app helper no longer needs two
+  variants to be usable inside `Db.transaction`.
 - **Breaking:** `Db.` handles are now capability-typed. `type 'a handle` carries a
   phantom: `Db.pool = [`Pool] handle` is the pool, and `Db.transaction`'s callback
   receives a `Db.tx = [`Tx] handle`. `exec`/`find`/`collect` are polymorphic in the
