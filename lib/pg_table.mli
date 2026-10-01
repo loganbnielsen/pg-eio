@@ -64,11 +64,11 @@ end
 
 (** Generate standard CRUD operations for a table from its schema. *)
 module Make (S : SCHEMA) : sig
-  val find   : Pg_db.pool -> S.id  -> (S.t option, Pg_error.t) result
-  val insert : Pg_db.pool -> S.t   -> (unit, Pg_error.t) result
-  val delete : Pg_db.pool -> S.id  -> (unit, Pg_error.t) result
+  val find   : 'a Pg_db.handle -> S.id  -> (S.t option, Pg_error.t) result
+  val insert : 'a Pg_db.handle -> S.t   -> (unit, Pg_error.t) result
+  val delete : 'a Pg_db.handle -> S.id  -> (unit, Pg_error.t) result
   val list
-    :  Pg_db.pool
+    :  'a Pg_db.handle
     -> ?limit:Limit.t
     -> ?offset:Offset.t
     -> unit
