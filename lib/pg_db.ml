@@ -1,12 +1,17 @@
 module Type    = Caqti_type
 module Request = Caqti_request
 
-(* Polymorphic record field hides the caqti pool's type variable. *)
-type pool = {
+(* Polymorphic record field hides the caqti pool's type variable. The capability is
+   phantom: [`Pool] and [`Tx] share this representation, so the distinction costs
+   nothing at runtime. *)
+type 'a handle = {
   use_conn :
     'b. (Caqti_eio.connection -> ('b, Pg_error.t) result) ->
         ('b, Pg_error.t) result;
 }
+
+type pool = [`Pool] handle
+type tx = [`Tx] handle
 
 (* Internal — carries application errors out of Pool.use callbacks. *)
 exception App_error of Pg_error.t
@@ -81,9 +86,9 @@ let transaction pool f =
              (Pg_error.to_string orig_err) (Caqti_error.show rb)))
     in
     let* () = map_err (C.start ()) in
-    let tx_pool = { use_conn = fun g -> g conn } in
+    let tx : tx = { use_conn = fun g -> g conn } in
     let result =
-      try f tx_pool with
+      try f tx with
       | (Out_of_memory | Stack_overflow | Sys.Break | Eio.Cancel.Cancelled _) as exn ->
         raise exn
       | exn ->
