@@ -104,9 +104,12 @@ discarded.
 
 ```ocaml
 type status = {
-  version    : int;
-  name       : string;
-  applied_at : string option;  (* None if not yet applied *)
+  version          : int;
+  name             : string;
+  applied_at       : string option;  (* None if not yet applied *)
+  checksum         : string option;  (* recorded at apply time; None if not applied, or
+                                        applied before checksums were recorded *)
+  content_checksum : string;         (* checksum of the file as it reads now *)
 }
 
 val apply
@@ -143,6 +146,13 @@ first `apply` (default name `sun_schema_migrations` — override with `~table` t
 multiple logical databases/tenants sharing one Postgres instance from colliding on
 version numbers). `~table` is validated as an unquoted SQL identifier
 (`[A-Za-z_][A-Za-z0-9_]*`) before use.
+
+Each applied version records the checksum of the file that was applied. `apply`
+refuses to run while an applied migration's file no longer matches its recorded
+checksum — restore the file, or put the change in a new migration — and `status`
+reports both the recorded checksum and the file's current checksum so a caller can
+surface the same drift. A version applied before checksums were recorded has no
+baseline and is not compared.
 
 The statement splitter used internally to break a migration file into individual
 statements is PostgreSQL-aware: it correctly handles semicolons inside single-quoted

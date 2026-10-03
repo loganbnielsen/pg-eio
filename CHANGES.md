@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Migration records the checksum of each file it applies (`Migration.status` gains
+  `checksum` and `content_checksum`), and `Migration.apply` refuses to run while an
+  applied migration's file disagrees with its recorded checksum instead of ignoring the
+  edit. A version applied before checksums were recorded has no baseline and is not
+  compared.
 - `Pg_table.Make`'s `find`/`insert`/`delete`/`all` take `'a Db.handle` rather than
   `Db.pool`, matching `Db.exec`/`find`/`collect`. A generated table accessor now works
   on the pool and on a transaction handle, so an app helper no longer needs two
