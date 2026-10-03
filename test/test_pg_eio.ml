@@ -673,6 +673,107 @@ let test_migration_rejects_unsafe_table_name () =
      | Error e ->
        Alcotest.failf "expected Migration_error, got: %s" (Pg_error.to_string e))
 
+let test_migration_status_carries_checksums () =
+  match postgres_url () with
+  | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
+  | Some url ->
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let pool = Pg_db.create_pool ~url ~sw
+                 ~stdenv:(env :> Caqti_eio.stdenv) ()
+               |> or_fail in
+    with_migration_dir @@ fun dir write ->
+    let tbl = Printf.sprintf "sun_mig_ck_%d" (Random.int 1000000) in
+    let mtable = Printf.sprintf "sun_test_mig_ck_%d" (Random.int 1000000) in
+    write "0001_create_checksum.sql"
+      (Printf.sprintf "CREATE TABLE IF NOT EXISTS %s (id INT)" tbl);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
+    let statuses = or_fail (Migration.status ~fs:env#fs pool ~dir ~table:mtable) in
+    (match statuses with
+     | [ s ] ->
+       Alcotest.(check bool) "applied" true (s.Migration.applied_at <> None);
+       Alcotest.(check (option string)) "recorded checksum is the file's checksum"
+         (Some s.Migration.content_checksum) s.Migration.checksum
+     | _ -> Alcotest.fail "expected exactly one status row");
+    let cleanup_q =
+      Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+        (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
+    in
+    or_fail (Pg_db.exec pool cleanup_q ())
+
+let test_migration_edit_of_applied_file_is_refused () =
+  match postgres_url () with
+  | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
+  | Some url ->
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let pool = Pg_db.create_pool ~url ~sw
+                 ~stdenv:(env :> Caqti_eio.stdenv) ()
+               |> or_fail in
+    with_migration_dir @@ fun dir write ->
+    let tbl = Printf.sprintf "sun_mig_drift_%d" (Random.int 1000000) in
+    let mtable = Printf.sprintf "sun_test_mig_drift_%d" (Random.int 1000000) in
+    write "0001_create_drift.sql"
+      (Printf.sprintf "CREATE TABLE IF NOT EXISTS %s (id INT)" tbl);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
+    write "0001_create_drift.sql"
+      (Printf.sprintf
+        "CREATE TABLE IF NOT EXISTS %s (id INT);\nALTER TABLE %s ADD COLUMN note TEXT" tbl tbl);
+    let statuses = or_fail (Migration.status ~fs:env#fs pool ~dir ~table:mtable) in
+    (match statuses with
+     | [ s ] ->
+       Alcotest.(check bool) "the applied version stays applied"
+         true (s.Migration.applied_at <> None);
+       Alcotest.(check bool) "the recorded checksum no longer matches the file"
+         false (s.Migration.checksum = Some s.Migration.content_checksum)
+     | _ -> Alcotest.fail "expected exactly one status row");
+    (match Migration.apply ~fs:env#fs pool ~dir ~table:mtable with
+     | Ok () -> Alcotest.fail "expected an edited applied migration to be refused"
+     | Error (Pg_error.Migration_error msg) ->
+       Alcotest.(check bool) "names the migration"
+         true (String.starts_with ~prefix:"migration 0001" msg)
+     | Error e ->
+       Alcotest.failf "expected Migration_error, got: %s" (Pg_error.to_string e));
+    let cleanup_q =
+      Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+        (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
+    in
+    or_fail (Pg_db.exec pool cleanup_q ())
+
+let test_migration_unrecorded_checksum_is_not_compared () =
+  match postgres_url () with
+  | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
+  | Some url ->
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let pool = Pg_db.create_pool ~url ~sw
+                 ~stdenv:(env :> Caqti_eio.stdenv) ()
+               |> or_fail in
+    with_migration_dir @@ fun dir write ->
+    let tbl = Printf.sprintf "sun_mig_nobase_%d" (Random.int 1000000) in
+    let mtable = Printf.sprintf "sun_test_mig_nobase_%d" (Random.int 1000000) in
+    write "0001_create_nobase.sql"
+      (Printf.sprintf "CREATE TABLE IF NOT EXISTS %s (id INT)" tbl);
+    or_fail (Migration.apply ~fs:env#fs pool ~dir ~table:mtable);
+    let clear_q =
+      Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+        (Printf.sprintf "UPDATE %s SET checksum = NULL" mtable)
+    in
+    or_fail (Pg_db.exec pool clear_q ());
+    write "0001_create_nobase.sql"
+      (Printf.sprintf
+        "CREATE TABLE IF NOT EXISTS %s (id INT);\nALTER TABLE %s ADD COLUMN note TEXT" tbl tbl);
+    (match Migration.apply ~fs:env#fs pool ~dir ~table:mtable with
+     | Ok () -> ()
+     | Error e ->
+       Alcotest.failf "a version applied without a recorded checksum has no baseline: %s"
+         (Pg_error.to_string e));
+    let cleanup_q =
+      Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+        (Printf.sprintf "DROP TABLE IF EXISTS %s, %s" tbl mtable)
+    in
+    or_fail (Pg_db.exec pool cleanup_q ())
+
 let test_table_make () =
   match postgres_url () with
   | None -> Printf.printf "[skip] POSTGRES_URL not set\n%!"
@@ -776,5 +877,10 @@ let () =
       test_case "rollback_down_sql_001" `Quick (test_migration_rollback_down_sql "001");
       test_case "rollback_down_sql_0001" `Quick (test_migration_rollback_down_sql "0001");
       test_case "rejects_unsafe_table_name" `Quick test_migration_rejects_unsafe_table_name;
+      test_case "status_carries_checksums" `Quick test_migration_status_carries_checksums;
+      test_case "edit_of_applied_file_is_refused" `Quick
+        test_migration_edit_of_applied_file_is_refused;
+      test_case "unrecorded_checksum_is_not_compared" `Quick
+        test_migration_unrecorded_checksum_is_not_compared;
     ];
   ]

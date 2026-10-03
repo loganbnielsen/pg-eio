@@ -1,10 +1,14 @@
 open Result.Syntax
 
 type status = {
-  version    : int;
-  name       : string;
-  applied_at : string option;
+  version          : int;
+  name             : string;
+  applied_at       : string option;
+  checksum         : string option;
+  content_checksum : string;
 }
+
+let checksum_of_content content = Digest.to_hex (Digest.string content)
 
 (* ── File parsing ────────────────────────────────────────────────────────── *)
 
@@ -236,8 +240,13 @@ let ensure_table table pool =
        {|CREATE TABLE IF NOT EXISTS %s (
            version    INTEGER PRIMARY KEY,
            name       TEXT    NOT NULL,
+           checksum   TEXT,
            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
          )|} table)
+  in
+  let* () = Pg_db.exec pool q () in
+  let q = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+    (Printf.sprintf "ALTER TABLE %s ADD COLUMN IF NOT EXISTS checksum TEXT" table)
   in
   Pg_db.exec pool q ()
 
@@ -253,15 +262,16 @@ let table_exists pool table =
   in
   Pg_db.find pool q table |> Result.map (Option.value ~default:false)
 
-let record_migration table pool version name =
-  let q = Caqti_request.Infix.(Caqti_type.(t2 int string) ->. Caqti_type.unit) ~oneshot:true
-    (Printf.sprintf "INSERT INTO %s (version, name) VALUES (?, ?)" table)
+let record_migration table pool version name checksum =
+  let q =
+    Caqti_request.Infix.(Caqti_type.(t3 int string string) ->. Caqti_type.unit) ~oneshot:true
+      (Printf.sprintf "INSERT INTO %s (version, name, checksum) VALUES (?, ?, ?)" table)
   in
-  Pg_db.exec pool q (version, name)
+  Pg_db.exec pool q (version, name, checksum)
 
-let applied_at_q table =
-  Caqti_request.Infix.(Caqti_type.int ->? Caqti_type.string) ~oneshot:true
-    (Printf.sprintf "SELECT applied_at::text FROM %s WHERE version = ?" table)
+let applied_row_q table =
+  Caqti_request.Infix.(Caqti_type.int ->? Caqti_type.(t2 (option string) (option string))) ~oneshot:true
+    (Printf.sprintf "SELECT checksum, applied_at::text FROM %s WHERE version = ?" table)
 
 let last_applied_q table =
   Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.(t2 int string)) ~oneshot:true
@@ -295,17 +305,56 @@ let pending ?(table = default_table) ~fs pool ~dir =
   in
   Ok (List.filter (fun (v, _, _) -> not (List.mem v applied)) migrations)
 
+let statuses_of ~table ~fs pool migrations =
+  let row_q = applied_row_q table in
+  List.fold_right (fun (version, name, path) acc ->
+    let* rows = acc in
+    let* sql = read_file ~fs path in
+    let* row = Pg_db.find pool row_q version in
+    let checksum, applied_at =
+      match row with
+      | None -> None, None
+      | Some (checksum, applied_at) -> checksum, applied_at
+    in
+    Ok ({ version; name; applied_at; checksum;
+          content_checksum = checksum_of_content sql } :: rows)
+  ) migrations (Ok [])
+
+let drift (s : status) =
+  match s.checksum, s.applied_at with
+  | Some recorded, Some _ when not (String.equal recorded s.content_checksum) ->
+    Some (Printf.sprintf
+      "migration %04d (%s) was applied with checksum %s but its file now reads as %s"
+      s.version s.name recorded s.content_checksum)
+  | _ -> None
+
+let refuse_drift statuses =
+  match List.filter_map drift statuses with
+  | [] -> Ok ()
+  | drifted ->
+    Error (Pg_error.Migration_error (String.concat "\n" (drifted @
+      [ "An already-applied migration's file changed. Sol records what it applied, so it \
+         refuses to run migrations while an applied migration disagrees with the file: \
+         restore the file, or put the change in a new migration." ])))
+
 let apply ?(table = default_table) ~fs pool ~dir =
   let* table = validate_table table in
-  let* pending = pending ~table ~fs pool ~dir in
+  let* migrations = read_migrations ~fs dir in
   let* () = ensure_table table pool |> Result.map_error (fun e ->
     Pg_error.Migration_error ("create migrations table: " ^ Pg_error.to_string e)) in
+  let* statuses = statuses_of ~table ~fs pool migrations in
+  let* () = refuse_drift statuses in
+  let applied = List.filter_map (fun (s : status) ->
+    if s.applied_at = None then None else Some s.version) statuses in
+  let pending = List.filter (fun (version, _, _) ->
+    not (List.mem version applied)) migrations in
   List.fold_left (fun acc (version, name, path) ->
     let* () = acc in
     let* sql = read_file ~fs path in
+    let checksum = checksum_of_content sql in
     Pg_db.transaction pool (fun pool ->
       let* () = exec_statements pool (split_sql_statements sql) in
-      record_migration table pool version name
+      record_migration table pool version name checksum
     )
     |> Result.map_error (fun e ->
       Pg_error.Migration_error (
@@ -320,12 +369,7 @@ let status ?(table = default_table) ~fs pool ~dir =
   let* table = validate_table table in
   let* migrations = read_migrations ~fs dir in
   let* () = ensure_table table pool |> wrap "create migrations table: " in
-  let row_q = applied_at_q table in
-  List.fold_right (fun (version, name, _) acc ->
-    let* rows = acc in
-    let* applied_at = Pg_db.find pool row_q version in
-    Ok ({ version; name; applied_at } :: rows)
-  ) migrations (Ok [])
+  statuses_of ~table ~fs pool migrations
 
 let migrations ~fs ~dir =
   read_migrations ~fs dir
